@@ -1,0 +1,22 @@
+# Compiled binaries
+spotumn
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binaries
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# OS / Editor temporary files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
