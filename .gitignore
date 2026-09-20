@@ -1,5 +1,6 @@
 # Compiled binaries
-spotumn
+-spotumn
++/spotumn
 *.exe
 *.exe~
 *.dll
