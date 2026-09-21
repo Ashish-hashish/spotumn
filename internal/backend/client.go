@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,11 +49,13 @@ type PlaybackState struct {
 	DeviceName   string
 	DeviceID     string
 	CurrentTrack *Track
+	ContextURI   string
 }
 
 type Client struct {
-	spClient *spotify.Client
-	mu       sync.RWMutex
+	spClient  *spotify.Client
+	mu        sync.RWMutex
+	lastState *PlaybackState
 }
 
 func NewClient(ctx context.Context, ts oauth2.TokenSource) *Client {
@@ -110,18 +113,26 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 			ps.CurrentTrack = &track
 			ps.DurationMs = int(state.Item.Duration)
 		}
+		if state.PlaybackContext.URI != "" {
+			ps.ContextURI = string(state.PlaybackContext.URI)
+		}
 		return ps, nil
 	}
 
 	// Fallback to currently playing if full state returned empty/204
 	if cp, cpErr := c.spClient.PlayerCurrentlyPlaying(ctx); cpErr == nil && cp != nil && cp.Item != nil {
 		track := extractTrack(cp.Item)
+		ctxURI := ""
+		if cp.PlaybackContext.URI != "" {
+			ctxURI = string(cp.PlaybackContext.URI)
+		}
 		return &PlaybackState{
 			Playing:      cp.Playing,
 			ProgressMs:   int(cp.Progress),
 			DurationMs:   int(cp.Item.Duration),
 			Volume:       50,
 			CurrentTrack: &track,
+			ContextURI:   ctxURI,
 		}, nil
 	}
 
@@ -304,6 +315,251 @@ func (c *Client) GetPlaylistTracks(ctx context.Context, playlistID string) ([]Tr
 	}
 
 	return tracks, nil
+}
+
+// GetAlbums fetches the user's saved albums from Spotify
+func (c *Client) GetAlbums(ctx context.Context) ([]Playlist, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var albums []Playlist
+	limit := 50
+	offset := 0
+
+	for {
+		page, err := c.spClient.CurrentUsersAlbums(ctx, spotify.Limit(limit), spotify.Offset(offset))
+		if err != nil {
+			break
+		}
+
+		for _, a := range page.Albums {
+			img := ""
+			if len(a.Images) > 0 {
+				img = a.Images[0].URL
+			}
+			artistName := ""
+			if len(a.Artists) > 0 {
+				artistName = a.Artists[0].Name
+			}
+			albums = append(albums, Playlist{
+				ID:         string(a.ID),
+				URI:        string(a.URI),
+				Name:       a.Name,
+				OwnerID:    artistName,
+				TrackCount: int(a.Tracks.Total),
+				ImageURL:   img,
+			})
+		}
+
+		offset += len(page.Albums)
+		if offset >= int(page.Total) || len(page.Albums) == 0 {
+			break
+		}
+	}
+
+	return albums, nil
+}
+
+// GetArtists fetches user's followed artists, falling back to top artists
+func (c *Client) GetArtists(ctx context.Context) ([]Playlist, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var artists []Playlist
+
+	// 1. Try followed artists first
+	cursor, err := c.spClient.CurrentUsersFollowedArtists(ctx, spotify.Limit(50))
+	if err == nil && cursor != nil && len(cursor.Artists) > 0 {
+		for _, a := range cursor.Artists {
+			img := ""
+			if len(a.Images) > 0 {
+				img = a.Images[0].URL
+			}
+			artists = append(artists, Playlist{
+				ID:         string(a.ID),
+				URI:        string(a.URI),
+				Name:       a.Name,
+				OwnerID:    "Artist",
+				TrackCount: int(a.Popularity),
+				ImageURL:   img,
+			})
+		}
+		return artists, nil
+	}
+
+	// 2. Fallback to top artists
+	top, err := c.spClient.CurrentUsersTopArtists(ctx, spotify.Limit(50))
+	if err == nil && top != nil {
+		for _, a := range top.Artists {
+			img := ""
+			if len(a.Images) > 0 {
+				img = a.Images[0].URL
+			}
+			artists = append(artists, Playlist{
+				ID:         string(a.ID),
+				URI:        string(a.URI),
+				Name:       a.Name,
+				OwnerID:    "Artist",
+				TrackCount: int(a.Popularity),
+				ImageURL:   img,
+			})
+		}
+	}
+
+	return artists, nil
+}
+
+// GetAlbumTracks fetches all tracks belonging to an album
+func (c *Client) GetAlbumTracks(ctx context.Context, albumID string) ([]Track, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	album, err := c.spClient.GetAlbum(ctx, spotify.ID(albumID))
+	if err == nil && album != nil {
+		artURL := ""
+		if len(album.Images) > 0 {
+			artURL = album.Images[0].URL
+		}
+		var tracks []Track
+		for _, t := range album.Tracks.Tracks {
+			artistNames := make([]string, len(t.Artists))
+			for i, a := range t.Artists {
+				artistNames[i] = a.Name
+			}
+			tracks = append(tracks, Track{
+				ID:         string(t.ID),
+				URI:        string(t.URI),
+				Name:       t.Name,
+				Artist:     strings.Join(artistNames, ", "),
+				Album:      album.Name,
+				DurationMs: int(t.Duration),
+				ArtURL:     artURL,
+			})
+		}
+		return tracks, nil
+	}
+
+	page, err := c.spClient.GetAlbumTracks(ctx, spotify.ID(albumID), spotify.Limit(50))
+	if err != nil {
+		return nil, err
+	}
+	var tracks []Track
+	for _, t := range page.Tracks {
+		artistNames := make([]string, len(t.Artists))
+		for i, a := range t.Artists {
+			artistNames[i] = a.Name
+		}
+		tracks = append(tracks, Track{
+			ID:         string(t.ID),
+			URI:        string(t.URI),
+			Name:       t.Name,
+			Artist:     strings.Join(artistNames, ", "),
+			DurationMs: int(t.Duration),
+		})
+	}
+	return tracks, nil
+}
+
+// GetArtistTracks fetches top tracks for an artist
+func (c *Client) GetArtistTracks(ctx context.Context, artistID string) ([]Track, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	fts, err := c.spClient.GetArtistsTopTracks(ctx, spotify.ID(artistID), "from_token")
+	if err != nil || len(fts) == 0 {
+		fts, err = c.spClient.GetArtistsTopTracks(ctx, spotify.ID(artistID), "US")
+	}
+	if err != nil {
+		return nil, err
+	}
+	var tracks []Track
+	for _, t := range fts {
+		tracks = append(tracks, extractTrack(&t))
+	}
+	return tracks, nil
+}
+
+// GetArtistAlbums fetches an artist's albums and singles
+func (c *Client) GetArtistAlbums(ctx context.Context, artistID string) ([]Playlist, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.spClient == nil {
+		return nil, nil
+	}
+
+	types := []spotify.AlbumType{spotify.AlbumTypeAlbum, spotify.AlbumTypeSingle}
+	page, err := c.spClient.GetArtistAlbums(ctx, spotify.ID(artistID), types, spotify.Limit(50), spotify.Market("from_token"))
+	if err != nil || page == nil || len(page.Albums) == 0 {
+		page, err = c.spClient.GetArtistAlbums(ctx, spotify.ID(artistID), types, spotify.Limit(50), spotify.Market("US"))
+	}
+	if err != nil || page == nil {
+		return nil, err
+	}
+
+	var rawAlbums []spotify.SimpleAlbum
+	rawAlbums = append(rawAlbums, page.Albums...)
+
+	// Fetch up to 2 additional pages (up to 150 albums max for responsiveness)
+	for pageCount := 0; pageCount < 2; pageCount++ {
+		err := c.spClient.NextPage(ctx, page)
+		if err != nil || len(page.Albums) == 0 {
+			break
+		}
+		rawAlbums = append(rawAlbums, page.Albums...)
+	}
+
+	var albums []Playlist
+	seen := make(map[string]bool)
+	for _, a := range rawAlbums {
+		cleanName := strings.ToLower(strings.TrimSpace(a.Name))
+		if seen[cleanName] {
+			continue
+		}
+		seen[cleanName] = true
+
+		img := ""
+		if len(a.Images) > 0 {
+			img = a.Images[0].URL
+		}
+		year := a.ReleaseDate
+		if len(year) > 4 {
+			year = year[:4]
+		}
+		typeLabel := "Album"
+		grp := a.AlbumGroup
+		if grp == "" {
+			grp = a.AlbumType
+		}
+		if grp != "" {
+			typeLabel = strings.ToUpper(grp[:1]) + strings.ToLower(grp[1:])
+		}
+		desc := typeLabel
+		if year != "" {
+			desc = fmt.Sprintf("%s • %s", typeLabel, year)
+		}
+
+		albums = append(albums, Playlist{
+			ID:         string(a.ID),
+			URI:        string(a.URI),
+			Name:       a.Name,
+			OwnerID:    desc,
+			TrackCount: int(a.TotalTracks),
+			ImageURL:   img,
+		})
+	}
+	return albums, nil
+}
+
+// GetContainerTracks dynamically routes to album, artist, or playlist tracks depending on URI
+func (c *Client) GetContainerTracks(ctx context.Context, id, uri string) ([]Track, error) {
+	if strings.HasPrefix(uri, "spotify:album:") {
+		return c.GetAlbumTracks(ctx, id)
+	}
+	if strings.HasPrefix(uri, "spotify:artist:") {
+		return c.GetArtistTracks(ctx, id)
+	}
+	return c.GetPlaylistTracks(ctx, id)
 }
 
 // Search searches for tracks and playlists matching the query
@@ -666,17 +922,70 @@ func (c *Client) QueueSong(ctx context.Context, trackURI string) error {
 	return c.spClient.QueueSong(ctx, spotify.ID(id))
 }
 
-// SaveLastState persists playback state to disk
+// PlayTrackAtPosition starts playback of a track at a specific timestamp (positionMs)
+func (c *Client) PlayTrackAtPosition(ctx context.Context, trackURI, contextURI string, positionMs int) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	opts := &spotify.PlayOptions{
+		PositionMs: spotify.Numeric(positionMs),
+	}
+	if !c.hasActiveDevice(ctx) {
+		if devID := c.findSpotumnDeviceID(ctx); devID != "" {
+			opts.DeviceID = &devID
+		} else {
+			devices, err := c.spClient.PlayerDevices(ctx)
+			if err == nil && len(devices) > 0 {
+				opts.DeviceID = &devices[0].ID
+			}
+		}
+	}
+
+	if contextURI != "" && !strings.Contains(contextURI, "collection") {
+		cURI := spotify.URI(contextURI)
+		opts.PlaybackContext = &cURI
+		if trackURI != "" {
+			tURI := spotify.URI(trackURI)
+			opts.PlaybackOffset = &spotify.PlaybackOffset{URI: tURI}
+		}
+	} else if trackURI != "" {
+		opts.URIs = []spotify.URI{spotify.URI(trackURI)}
+	}
+
+	err := c.spClient.PlayOpt(ctx, opts)
+	if err == nil && positionMs > 0 {
+		_ = c.spClient.Seek(ctx, positionMs)
+	}
+	return err
+}
+
+// SaveLastState persists playback state to disk and maintains an in-memory copy
 func (c *Client) SaveLastState(ps *PlaybackState) {
 	if ps == nil || ps.CurrentTrack == nil {
 		return
 	}
-	data, err := json.Marshal(ps)
+	c.mu.Lock()
+	cp := *ps
+	if ps.CurrentTrack != nil {
+		ct := *ps.CurrentTrack
+		cp.CurrentTrack = &ct
+	}
+	c.lastState = &cp
+	c.mu.Unlock()
+
+	data, err := json.Marshal(&cp)
 	if err != nil {
 		return
 	}
 	path := filepath.Join(config.GetDir(), "last_state.json")
 	_ = os.WriteFile(path, data, 0600)
+}
+
+// GetLastSavedState returns the in-memory last saved state
+func (c *Client) GetLastSavedState() *PlaybackState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastState
 }
 
 // LoadLastState retrieves the last known playback state from disk
@@ -690,6 +999,8 @@ func (c *Client) LoadLastState() *PlaybackState {
 	if err := json.Unmarshal(data, &ps); err != nil {
 		return nil
 	}
-	ps.Playing = false
+	c.mu.Lock()
+	c.lastState = &ps
+	c.mu.Unlock()
 	return &ps
 }

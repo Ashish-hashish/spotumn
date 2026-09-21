@@ -13,21 +13,24 @@ type PlaylistFilter int
 
 const (
 	FilterAll PlaylistFilter = iota
-	FilterByYou
 	FilterSpotify
-	FilterSaved
+	FilterByYou
+	FilterAlbums
+	FilterArtists
 )
 
 func (f PlaylistFilter) String() string {
 	switch f {
+	case FilterSpotify:
+		return "By Spotify"
 	case FilterByYou:
 		return "By You"
-	case FilterSpotify:
-		return "Spotify"
-	case FilterSaved:
-		return "Saved"
+	case FilterAlbums:
+		return "Albums"
+	case FilterArtists:
+		return "Artists"
 	default:
-		return "All"
+		return "ALL"
 	}
 }
 
@@ -40,12 +43,19 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 		height = 3
 	}
 
+	categoryTitle := "Playlists"
+	if filter == FilterAlbums {
+		categoryTitle = "Albums"
+	} else if filter == FilterArtists {
+		categoryTitle = "Artists"
+	}
+
 	filterName := filter.String()
 	prefixDot := ""
 	if focused {
 		prefixDot = "● "
 	}
-	titleText := fmt.Sprintf(" %sPlaylists [%s] ", prefixDot, filterName)
+	titleText := fmt.Sprintf(" %s%s [%s] ", prefixDot, categoryTitle, filterName)
 	title := StylePurple.Render(titleText)
 	hints := StyleFaint.Render(" [f] filter  [*] pin ")
 
@@ -85,13 +95,25 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 			starPrefix = "★ "
 		}
 
-		countStr := fmt.Sprintf(" (%d)", pl.TrackCount)
+		countStr := ""
+		displayName := pl.Name
+		if filter == FilterAlbums {
+			if pl.OwnerID != "" && width >= 34 {
+				displayName = fmt.Sprintf("%s ─ %s", pl.Name, pl.OwnerID)
+			}
+			countStr = fmt.Sprintf(" (%d)", pl.TrackCount)
+		} else if filter == FilterArtists {
+			countStr = ""
+		} else if pl.TrackCount > 0 {
+			countStr = fmt.Sprintf(" (%d)", pl.TrackCount)
+		}
+
 		availNameW := width - ansi.StringWidth(prefix) - ansi.StringWidth(starPrefix) - ansi.StringWidth(countStr) - 1
 		if availNameW < 4 {
 			availNameW = 4
 		}
 
-		truncName := TruncateString(pl.Name, availNameW)
+		truncName := TruncateString(displayName, availNameW)
 		plainLine := prefix + starPrefix + truncName + countStr
 
 		var lineContent string

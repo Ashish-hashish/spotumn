@@ -20,16 +20,27 @@ type TickMsg time.Time
 type PlaybackMsg *backend.PlaybackState
 type QueueMsg *backend.QueueData
 type PlaylistsMsg []backend.Playlist
+type containerHistoryItem struct {
+	ID          string
+	URI         string
+	Name        string
+	CenterIndex int
+}
+
 type TracksMsg struct {
 	PlaylistURI  string
 	PlaylistName string
 	Tracks       []backend.Track
+	Albums       []backend.Playlist
 }
 type HistoryMsg []backend.Track
 type LyricsMsg []lyrics.Line
 type ArtMsg struct {
-	ANSI string
-	Zen  bool
+	ANSI     string
+	DiskPath string
+	Width    int
+	Height   int
+	Zen      bool
 }
 type DevicesMsg []spotify.PlayerDevice
 type UserMsg struct {
@@ -53,6 +64,7 @@ type AppModel struct {
 	showLeftSidebar  bool
 	showRightSidebar bool
 	zenMode          bool
+	zenView          ZenViewMode
 	showHelp         bool
 	showDevices      bool
 	deviceScanning   bool
@@ -72,11 +84,15 @@ type AppModel struct {
 	searchQuery   string
 
 	playlists      []backend.Playlist
+	albums         []backend.Playlist
+	artists        []backend.Playlist
 	pinnedURIs     map[string]bool
 	playlistFilter PlaylistFilter
 	currentPlURI   string
 	currentPlName  string
 	playlistTracks []backend.Track
+	artistAlbums   []backend.Playlist
+	navHistory     []containerHistoryItem
 
 	history []backend.Track
 
@@ -88,6 +104,7 @@ type AppModel struct {
 	artANSI            string
 	zenArtANSI         string
 	lastArtURL         string
+	lastDiskPath       string
 	lastTrackURI       string
 
 	tickCount int
@@ -135,10 +152,17 @@ func sortPlaylistsWithPinned(playlists []backend.Playlist, pinned map[string]boo
 	return append(pinnedList, unpinnedList...)
 }
 
-func NewAppModel(client *backend.Client) *AppModel {
+func NewAppModel(client *backend.Client, cfg ...*config.Config) *AppModel {
+	artMode := "auto"
+	if len(cfg) > 0 && cfg[0] != nil && cfg[0].ArtRenderer != "" {
+		artMode = cfg[0].ArtRenderer
+	} else if c, err := config.Load(); err == nil && c.ArtRenderer != "" {
+		artMode = c.ArtRenderer
+	}
+
 	m := &AppModel{
 		client:           client,
-		artRen:           art.NewRenderer(),
+		artRen:           art.NewRenderer(artMode),
 		lyrProv:          lyrics.NewProvider(),
 		width:            100,
 		height:           30,
@@ -152,12 +176,13 @@ func NewAppModel(client *backend.Client) *AppModel {
 		lyricsCursor:     0,
 		pinnedURIs:       loadPinned(),
 		playlistFilter:   FilterAll,
-		username:         "BrightestAutumn",
+		username:         "",
 	}
 
-	// Restore last active playback state on startup
+	// Restore last active playback state on startup in paused state
 	lastState := client.LoadLastState()
 	if lastState != nil {
+		lastState.Playing = false // Opens paused, requiring manual play
 		m.playback = lastState
 		if lastState.CurrentTrack != nil {
 			m.lastArtURL = lastState.CurrentTrack.ArtURL
@@ -174,6 +199,8 @@ func (m *AppModel) Init() tea.Cmd {
 		m.doTick(),
 		m.fetchUserCmd(),
 		m.fetchPlaylistsCmd(),
+		m.fetchAlbumsCmd(),
+		m.fetchArtistsCmd(),
 		m.fetchHistoryCmd(),
 		m.fetchPlaybackCmd(),
 		m.fetchQueueCmd(),
@@ -181,6 +208,9 @@ func (m *AppModel) Init() tea.Cmd {
 	if m.lastArtURL != "" {
 		cmds = append(cmds, m.fetchArtCmd(m.lastArtURL, 40, 20, false))
 		cmds = append(cmds, m.fetchArtCmd(m.lastArtURL, 56, 26, true))
+	}
+	if m.playback != nil && m.playback.CurrentTrack != nil {
+		cmds = append(cmds, m.fetchLyricsCmd(m.playback.CurrentTrack.Name, m.playback.CurrentTrack.Artist, m.playback.DurationMs/1000))
 	}
 	return tea.Batch(cmds...)
 }
@@ -200,6 +230,20 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		art.ClearGraphics()
+		if m.lastDiskPath != "" && m.artRen.CanShowGraphic() {
+			if m.zenMode {
+				if m.zenView != ZenViewLyrics {
+					row, col, w, h := m.getZenArtGeometry()
+					if w > 0 && h > 0 {
+						_ = art.DrawGraphicArt(m.lastDiskPath, row, col, w, h)
+					}
+				}
+			} else {
+				row, col := m.getArtPosition(false, 34, 17)
+				_ = art.DrawGraphicArt(m.lastDiskPath, row, col, 34, 17)
+			}
+		}
 		return m, nil
 
 	case TickMsg:
@@ -209,6 +253,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.playback.ProgressMs += 500
 			if m.playback.DurationMs > 0 && m.playback.ProgressMs > m.playback.DurationMs {
 				m.playback.ProgressMs = m.playback.DurationMs
+			}
+			if m.tickCount%4 == 0 {
+				m.client.SaveLastState(m.playback)
 			}
 		}
 
@@ -241,15 +288,17 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UserMsg:
 		if msg.DisplayName != "" {
 			m.username = msg.DisplayName
+		} else if msg.UserID != "" {
+			m.username = msg.UserID
 		}
 		m.userID = msg.UserID
 		return m, nil
 
 	case PlaybackMsg:
 		if msg != nil {
-			m.playback = msg
-			m.client.SaveLastState(msg)
 			if msg.CurrentTrack != nil {
+				m.playback = msg
+				m.client.SaveLastState(msg)
 				if msg.CurrentTrack.URI != m.lastTrackURI {
 					m.lastTrackURI = msg.CurrentTrack.URI
 					m.lyricsCursor = 0
@@ -264,6 +313,11 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, tea.Batch(cmds...)
 				}
+			} else if m.playback != nil && m.playback.CurrentTrack != nil {
+				// Keep loaded track & exact timestamp when Spotify returns empty state on startup
+				m.playback.Playing = false
+			} else {
+				m.playback = msg
 			}
 		}
 		return m, nil
@@ -285,6 +339,26 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case AlbumsMsg:
+		m.albums = sortPlaylistsWithPinned(msg, m.pinnedURIs)
+		if m.playlistFilter == FilterAlbums && len(m.albums) > 0 && len(m.playlistTracks) == 0 {
+			top := m.albums[0]
+			m.currentPlURI = top.URI
+			m.currentPlName = top.Name
+			return m, m.fetchPlaylistTracksCmd(top.ID, top.URI, top.Name)
+		}
+		return m, nil
+
+	case ArtistsMsg:
+		m.artists = sortPlaylistsWithPinned(msg, m.pinnedURIs)
+		if m.playlistFilter == FilterArtists && len(m.artists) > 0 && len(m.playlistTracks) == 0 {
+			top := m.artists[0]
+			m.currentPlURI = top.URI
+			m.currentPlName = top.Name
+			return m, m.fetchPlaylistTracksCmd(top.ID, top.URI, top.Name)
+		}
+		return m, nil
+
 	case HistoryMsg:
 		m.history = msg
 		return m, nil
@@ -295,6 +369,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentPlName = msg.PlaylistName
 		}
 		m.playlistTracks = msg.Tracks
+		m.artistAlbums = msg.Albums
 		m.centerIndex = 0
 		m.currentTab = TabTracks
 		return m, nil
@@ -319,6 +394,22 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.zenArtANSI = msg.ANSI
 		} else {
 			m.artANSI = msg.ANSI
+		}
+		if msg.DiskPath != "" {
+			m.lastDiskPath = msg.DiskPath
+		}
+		if m.lastDiskPath != "" && m.artRen.CanShowGraphic() {
+			if m.zenMode {
+				if m.zenView != ZenViewLyrics {
+					row, col, w, h := m.getZenArtGeometry()
+					if w > 0 && h > 0 {
+						_ = art.DrawGraphicArt(m.lastDiskPath, row, col, w, h)
+					}
+				}
+			} else {
+				row, col := m.getArtPosition(false, msg.Width, msg.Height)
+				_ = art.DrawGraphicArt(m.lastDiskPath, row, col, msg.Width, msg.Height)
+			}
 		}
 		return m, nil
 
@@ -371,6 +462,10 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Quit spotumn
 	if key == "ctrl+c" {
+		if m.playback != nil && m.playback.CurrentTrack != nil {
+			m.client.SaveLastState(m.playback)
+		}
+		art.ClearGraphics()
 		return m, tea.Quit
 	}
 
@@ -454,8 +549,19 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Global Keybindings
 	switch key {
+	case "backspace", "b":
+		if len(m.navHistory) > 0 {
+			prev := m.navHistory[len(m.navHistory)-1]
+			m.navHistory = m.navHistory[:len(m.navHistory)-1]
+			m.currentPlURI = prev.URI
+			m.currentPlName = prev.Name
+			m.centerIndex = prev.CenterIndex
+			return m, m.fetchPlaylistTracksCmd(prev.ID, prev.URI, prev.Name)
+		}
+		return m, nil
+
 	case "esc":
-		if m.currentTab == TabLyrics {
+		if m.zenMode || m.currentTab == TabLyrics {
 			m.lyricsManualScroll = false
 			if m.playback != nil && len(m.lyricsLines) > 0 {
 				activeIdx := lyrics.FindActiveIndex(m.lyricsLines, m.playback.ProgressMs)
@@ -479,10 +585,50 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.deviceScanning = false
 		return m, nil
 
+	case "v":
+		if m.zenMode {
+			m.zenView = (m.zenView + 1) % 3
+			art.ClearGraphics()
+			if m.zenView != ZenViewLyrics {
+				if m.lastDiskPath != "" && m.artRen.CanShowGraphic() {
+					row, col, w, h := m.getZenArtGeometry()
+					if w > 0 && h > 0 {
+						_ = art.DrawGraphicArt(m.lastDiskPath, row, col, w, h)
+					}
+				}
+				if m.lastArtURL != "" {
+					_, _, w, h := m.getZenArtGeometry()
+					if w > 0 && h > 0 {
+						return m, m.fetchArtCmd(m.lastArtURL, w, h, true)
+					}
+				}
+			}
+			return m, nil
+		}
+
 	case "z":
 		m.zenMode = !m.zenMode
-		if m.zenMode && m.lastArtURL != "" && m.zenArtANSI == "" {
-			return m, m.fetchArtCmd(m.lastArtURL, 56, 26, true)
+		art.ClearGraphics()
+		if m.zenMode {
+			if m.zenView != ZenViewLyrics {
+				if m.lastDiskPath != "" && m.artRen.CanShowGraphic() {
+					row, col, w, h := m.getZenArtGeometry()
+					if w > 0 && h > 0 {
+						_ = art.DrawGraphicArt(m.lastDiskPath, row, col, w, h)
+					}
+				}
+				if m.lastArtURL != "" {
+					_, _, w, h := m.getZenArtGeometry()
+					if w > 0 && h > 0 {
+						return m, m.fetchArtCmd(m.lastArtURL, w, h, true)
+					}
+				}
+			}
+		} else {
+			if m.lastDiskPath != "" && m.artRen.CanShowGraphic() {
+				row, col := m.getArtPosition(false, 34, 17)
+				_ = art.DrawGraphicArt(m.lastDiskPath, row, col, 34, 17)
+			}
 		}
 		return m, nil
 
@@ -501,6 +647,10 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.showRightSidebar = false
 			}
+		}
+		if m.lastDiskPath != "" && m.artRen.CanShowGraphic() && !m.zenMode {
+			row, col := m.getArtPosition(false, 34, 17)
+			_ = art.DrawGraphicArt(m.lastDiskPath, row, col, 34, 17)
 		}
 		return m, nil
 
@@ -539,8 +689,16 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "f", "t":
 		if m.focused == PaneNav {
-			m.playlistFilter = (m.playlistFilter + 1) % 4
+			m.playlistFilter = (m.playlistFilter + 1) % 5
 			m.navIndex = 0
+			m.navHistory = nil
+			items := m.filteredPlaylists()
+			if len(items) > 0 {
+				top := items[0]
+				m.currentPlURI = top.URI
+				m.currentPlName = top.Name
+				return m, m.fetchPlaylistTracksCmd(top.ID, top.URI, top.Name)
+			}
 			return m, nil
 		}
 
@@ -552,6 +710,8 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.pinnedURIs[pl.URI] = !m.pinnedURIs[pl.URI]
 				savePinned(m.pinnedURIs)
 				m.playlists = sortPlaylistsWithPinned(m.playlists, m.pinnedURIs)
+				m.albums = sortPlaylistsWithPinned(m.albums, m.pinnedURIs)
+				m.artists = sortPlaylistsWithPinned(m.artists, m.pinnedURIs)
 				return m, nil
 			}
 		}
@@ -589,12 +749,32 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		isPlaying := false
 		if m.playback != nil {
 			isPlaying = m.playback.Playing
+			m.playback.Playing = !isPlaying
+			m.client.SaveLastState(m.playback)
+		}
+		trackURI := ""
+		contextURI := ""
+		progressMs := 0
+		if m.playback != nil && m.playback.CurrentTrack != nil {
+			trackURI = m.playback.CurrentTrack.URI
+			contextURI = m.playback.ContextURI
+			progressMs = m.playback.ProgressMs
 		}
 		return m, func() tea.Msg {
-			_ = m.client.PlayPause(context.Background(), isPlaying)
+			if isPlaying {
+				_ = m.client.Pause(context.Background())
+			} else {
+				err := m.client.Play(context.Background())
+				if err != nil && trackURI != "" {
+					_ = m.client.PlayTrackAtPosition(context.Background(), trackURI, contextURI, progressMs)
+				}
+			}
 			time.Sleep(150 * time.Millisecond)
 			st, _ := m.client.GetPlaybackState(context.Background())
-			return PlaybackMsg(st)
+			if st != nil && st.CurrentTrack != nil {
+				return PlaybackMsg(st)
+			}
+			return nil
 		}
 
 	case "p":
@@ -679,6 +859,7 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				pos = 0
 			}
 			m.playback.ProgressMs = pos
+			m.client.SaveLastState(m.playback)
 		}
 		return m, func() tea.Msg {
 			_ = m.client.Seek(context.Background(), pos)
@@ -693,6 +874,7 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				pos = m.playback.DurationMs
 			}
 			m.playback.ProgressMs = pos
+			m.client.SaveLastState(m.playback)
 		}
 		return m, func() tea.Msg {
 			_ = m.client.Seek(context.Background(), pos)
@@ -715,31 +897,33 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AppModel) filteredPlaylists() []backend.Playlist {
-	if m.playlistFilter == FilterAll {
+	switch m.playlistFilter {
+	case FilterAll:
 		return m.playlists
-	}
-	var res []backend.Playlist
-	for _, pl := range m.playlists {
-		switch m.playlistFilter {
-		case FilterByYou:
-			if m.userID != "" && (pl.OwnerID == m.userID || strings.EqualFold(pl.OwnerID, m.username)) {
-				res = append(res, pl)
-			}
-		case FilterSpotify:
+	case FilterSpotify:
+		var res []backend.Playlist
+		for _, pl := range m.playlists {
 			if strings.EqualFold(pl.OwnerID, "spotify") {
 				res = append(res, pl)
 			}
-		case FilterSaved:
-			// Show playlists saved from other users/artists or pinned
-			isOwn := m.userID != "" && (pl.OwnerID == m.userID || strings.EqualFold(pl.OwnerID, m.username))
-			if !isOwn || m.pinnedURIs[pl.URI] {
+		}
+		return res
+	case FilterByYou:
+		var res []backend.Playlist
+		for _, pl := range m.playlists {
+			isOwn := (m.userID != "" && pl.OwnerID == m.userID) || (m.username != "" && strings.EqualFold(pl.OwnerID, m.username))
+			if isOwn {
 				res = append(res, pl)
 			}
-		default:
-			res = append(res, pl)
 		}
+		return res
+	case FilterAlbums:
+		return m.albums
+	case FilterArtists:
+		return m.artists
+	default:
+		return m.playlists
 	}
-	return res
 }
 
 func (m *AppModel) cycleFocus(delta int) {
@@ -765,6 +949,15 @@ func (m *AppModel) cycleFocus(delta int) {
 }
 
 func (m *AppModel) moveCursor(delta int) {
+	if m.zenMode {
+		m.lyricsManualScroll = true
+		newIdx := m.lyricsCursor + delta
+		if newIdx >= 0 && newIdx < len(m.lyricsLines) {
+			m.lyricsCursor = newIdx
+		}
+		return
+	}
+
 	switch m.focused {
 	case PaneNav:
 		pls := m.filteredPlaylists()
@@ -776,8 +969,9 @@ func (m *AppModel) moveCursor(delta int) {
 	case PaneCenter:
 		switch m.currentTab {
 		case TabTracks:
+			totalItems := len(m.playlistTracks) + len(m.artistAlbums)
 			newIdx := m.centerIndex + delta
-			if newIdx >= 0 && newIdx < len(m.playlistTracks) {
+			if newIdx >= 0 && newIdx < totalItems {
 				m.centerIndex = newIdx
 			}
 		case TabHistory:
@@ -802,11 +996,28 @@ func (m *AppModel) moveCursor(delta int) {
 }
 
 func (m *AppModel) handleEnter() (tea.Model, tea.Cmd) {
+	if m.zenMode {
+		if m.lyricsCursor >= 0 && m.lyricsCursor < len(m.lyricsLines) {
+			timeMs := m.lyricsLines[m.lyricsCursor].TimeMs
+			m.lyricsManualScroll = false
+			if m.playback != nil {
+				m.playback.ProgressMs = timeMs
+				m.client.SaveLastState(m.playback)
+			}
+			return m, func() tea.Msg {
+				_ = m.client.Seek(context.Background(), timeMs)
+				return nil
+			}
+		}
+		return m, nil
+	}
+
 	switch m.focused {
 	case PaneNav:
 		pls := m.filteredPlaylists()
 		if m.navIndex >= 0 && m.navIndex < len(pls) {
 			pl := pls[m.navIndex]
+			m.navHistory = nil
 			m.currentPlURI = pl.URI
 			m.currentPlName = pl.Name
 			m.currentTab = TabTracks
@@ -827,6 +1038,25 @@ func (m *AppModel) handleEnter() (tea.Model, tea.Cmd) {
 					st, _ := m.client.GetPlaybackState(context.Background())
 					return PlaybackMsg(st)
 				}
+			} else if m.centerIndex >= len(m.playlistTracks) && m.centerIndex < len(m.playlistTracks)+len(m.artistAlbums) {
+				albumIdx := m.centerIndex - len(m.playlistTracks)
+				album := m.artistAlbums[albumIdx]
+
+				currID := ""
+				if parts := strings.Split(m.currentPlURI, ":"); len(parts) >= 3 {
+					currID = parts[2]
+				}
+				m.navHistory = append(m.navHistory, containerHistoryItem{
+					ID:          currID,
+					URI:         m.currentPlURI,
+					Name:        m.currentPlName,
+					CenterIndex: m.centerIndex,
+				})
+
+				m.currentPlURI = album.URI
+				m.currentPlName = album.Name
+				m.centerIndex = 0
+				return m, m.fetchPlaylistTracksCmd(album.ID, album.URI, album.Name)
 			}
 
 		case TabHistory:
@@ -847,6 +1077,7 @@ func (m *AppModel) handleEnter() (tea.Model, tea.Cmd) {
 				m.lyricsManualScroll = false
 				if m.playback != nil {
 					m.playback.ProgressMs = timeMs
+					m.client.SaveLastState(m.playback)
 				}
 				return m, func() tea.Msg {
 					_ = m.client.Seek(context.Background(), timeMs)
@@ -892,6 +1123,7 @@ func (m *AppModel) View() tea.View {
 		ShowLeftSidebar:  m.showLeftSidebar,
 		ShowRightSidebar: m.showRightSidebar,
 		ZenMode:          m.zenMode,
+		ZenView:          m.zenView,
 		ShowHelp:         m.showHelp,
 		ShowDevices:      m.showDevices,
 		DeviceScanning:   m.deviceScanning,
@@ -908,6 +1140,7 @@ func (m *AppModel) View() tea.View {
 		PinnedURIs:       m.pinnedURIs,
 		PlaylistFilter:   m.playlistFilter,
 		PlaylistTracks:   m.playlistTracks,
+		ArtistAlbums:     m.artistAlbums,
 		PlaylistName:     m.currentPlName,
 		History:          m.history,
 		Playback:         m.playback,
@@ -922,6 +1155,10 @@ func (m *AppModel) View() tea.View {
 	v.WindowTitle = "spotumn"
 	// Native terminal background (zero background color override)
 	return v
+}
+
+func (m *AppModel) GetPlaybackState() *backend.PlaybackState {
+	return m.playback
 }
 
 // Commands
@@ -949,6 +1186,29 @@ func (m *AppModel) fetchPlaylistsCmd() tea.Cmd {
 			return ErrorMsg(err)
 		}
 		return PlaylistsMsg(playlists)
+	}
+}
+
+type AlbumsMsg []backend.Playlist
+type ArtistsMsg []backend.Playlist
+
+func (m *AppModel) fetchAlbumsCmd() tea.Cmd {
+	return func() tea.Msg {
+		albums, err := m.client.GetAlbums(context.Background())
+		if err != nil {
+			return AlbumsMsg(nil)
+		}
+		return AlbumsMsg(albums)
+	}
+}
+
+func (m *AppModel) fetchArtistsCmd() tea.Cmd {
+	return func() tea.Msg {
+		artists, err := m.client.GetArtists(context.Background())
+		if err != nil {
+			return ArtistsMsg(nil)
+		}
+		return ArtistsMsg(artists)
 	}
 }
 
@@ -981,7 +1241,28 @@ func (m *AppModel) fetchQueueCmd() tea.Cmd {
 
 func (m *AppModel) fetchPlaylistTracksCmd(plID, plURI, plName string) tea.Cmd {
 	return func() tea.Msg {
-		tracks, err := m.client.GetPlaylistTracks(context.Background(), plID)
+		if plID == "" && strings.Contains(plURI, ":") {
+			parts := strings.Split(plURI, ":")
+			if len(parts) >= 3 {
+				plID = parts[2]
+			}
+		}
+
+		if strings.HasPrefix(plURI, "spotify:artist:") {
+			tracks, err := m.client.GetArtistTracks(context.Background(), plID)
+			if err != nil {
+				return ErrorMsg(err)
+			}
+			albums, _ := m.client.GetArtistAlbums(context.Background(), plID)
+			return TracksMsg{
+				PlaylistURI:  plURI,
+				PlaylistName: plName,
+				Tracks:       tracks,
+				Albums:       albums,
+			}
+		}
+
+		tracks, err := m.client.GetContainerTracks(context.Background(), plID, plURI)
 		if err != nil {
 			return ErrorMsg(err)
 		}
@@ -989,6 +1270,7 @@ func (m *AppModel) fetchPlaylistTracksCmd(plID, plURI, plName string) tea.Cmd {
 			PlaylistURI:  plURI,
 			PlaylistName: plName,
 			Tracks:       tracks,
+			Albums:       nil,
 		}
 	}
 }
@@ -1002,9 +1284,163 @@ func (m *AppModel) fetchLyricsCmd(trackName, artistName string, durSec int) tea.
 
 func (m *AppModel) fetchArtCmd(url string, w, h int, zen bool) tea.Cmd {
 	return func() tea.Msg {
-		ansi, _ := m.artRen.Render(url, w, h)
-		return ArtMsg{ANSI: ansi, Zen: zen}
+		ansiStr, diskPath, _ := m.artRen.Render(url, w, h)
+		return ArtMsg{
+			ANSI:     ansiStr,
+			DiskPath: diskPath,
+			Width:    w,
+			Height:   h,
+			Zen:      zen,
+		}
 	}
+}
+
+func (m *AppModel) getZenArtGeometry() (row, col, w, h int) {
+	if m.zenView == ZenViewLyrics {
+		return 0, 0, 0, 0
+	}
+
+	innerW := m.width - 2
+	innerH := m.height - 2
+	maxH := innerH - 8
+	if maxH < 4 {
+		return 0, 0, 0, 0
+	}
+
+	if m.zenView == ZenViewBoth {
+		gapW := 2
+		leftW := (innerW - gapW) * 48 / 100
+		if leftW < 30 {
+			leftW = (innerW - gapW) / 2
+		}
+		if leftW > innerW-25 {
+			leftW = innerW - 25
+		}
+		if leftW < 10 {
+			leftW = innerW / 2
+		}
+		maxW := leftW - 4
+		if maxW < 8 {
+			return 0, 0, 0, 0
+		}
+		targetW := maxH * 2
+		if targetW > maxW {
+			targetW = maxW
+		}
+		if targetW%2 != 0 {
+			targetW--
+		}
+		if targetW > 56 {
+			targetW = 56
+		}
+		targetH := targetW / 2
+		if targetH > maxH {
+			targetH = maxH
+		}
+
+		artStackH := targetH + 6
+		topPad := (innerH - artStackH) / 2
+		if topPad < 0 {
+			topPad = 0
+		}
+		row = 2 + topPad
+		col = 2 + (leftW-targetW)/2
+		return row, col, targetW, targetH
+	}
+
+	// ZenViewArt
+	maxW := innerW - 8
+	if maxW < 8 {
+		return 0, 0, 0, 0
+	}
+	targetW := maxH * 2
+	if targetW > maxW {
+		targetW = maxW
+	}
+	if targetW%2 != 0 {
+		targetW--
+	}
+	if targetW > 64 {
+		targetW = 64
+	}
+	targetH := targetW / 2
+	if targetH > maxH {
+		targetH = maxH
+	}
+
+	artStackH := targetH + 6
+	topPad := (innerH - artStackH) / 2
+	if topPad < 0 {
+		topPad = 0
+	}
+	row = 2 + topPad
+	col = (m.width-targetW)/2 + 1
+	return row, col, targetW, targetH
+}
+
+func (m *AppModel) getArtPosition(zen bool, artW, artH int) (int, int) {
+	if zen {
+		r, c, _, _ := m.getZenArtGeometry()
+		if r > 0 && c > 0 {
+			return r, c
+		}
+		row := 3
+		col := (m.width-artW)/2 + 1
+		if col < 1 {
+			col = 1
+		}
+		return row, col
+	}
+
+	innerW := m.width - 2
+	if innerW < 40 {
+		innerW = 40
+	}
+
+	var navW, centerW, rightW int
+	if m.showLeftSidebar && m.showRightSidebar {
+		navW = innerW * 28 / 100
+		if navW < 30 {
+			navW = 30
+		}
+		if navW > 45 {
+			navW = 45
+		}
+
+		rightW = innerW * 34 / 100
+		if rightW < 34 {
+			rightW = 34
+		}
+		if rightW > 50 {
+			rightW = 50
+		}
+
+		centerW = innerW - navW - rightW
+		if centerW < 20 {
+			centerW = 20
+		}
+	} else if !m.showLeftSidebar && m.showRightSidebar {
+		navW = 0
+		rightW = innerW * 35 / 100
+		if rightW < 34 {
+			rightW = 34
+		}
+		if rightW > 50 {
+			rightW = 50
+		}
+		centerW = innerW - rightW
+	} else {
+		return 0, 0
+	}
+
+	padLeft := (rightW - 2 - artW) / 2
+	if padLeft < 0 {
+		padLeft = 0
+	}
+
+	col := 1 + navW + centerW + 1 + padLeft + 1
+	row := 4
+	return row, col
 }
 
 func (m *AppModel) searchCmd(query string) tea.Cmd {

@@ -31,12 +31,15 @@ const (
 )
 
 var Scopes = []string{
+	"user-read-private",
+	"user-read-email",
 	"user-read-playback-state",
 	"user-modify-playback-state",
 	"user-read-currently-playing",
 	"playlist-read-private",
 	"playlist-read-collaborative",
 	"user-library-read",
+	"user-follow-read",
 	"user-read-playback-position",
 	"user-top-read",
 	"user-read-recently-played",
@@ -53,7 +56,10 @@ type AuthService struct {
 }
 
 func NewAuthService(cfg *config.Config) *AuthService {
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", cfg.Port)
+	redirectURI := cfg.RedirectURI
+	if redirectURI == "" {
+		redirectURI = fmt.Sprintf("http://127.0.0.1:%d/login", cfg.Port)
+	}
 	oauthCfg := &oauth2.Config{
 		ClientID: cfg.ClientID,
 		Endpoint: oauth2.Endpoint{
@@ -161,8 +167,19 @@ func (s *savingTokenSource) Token() (*oauth2.Token, error) {
 // Authorize performs the PKCE authorization flow using a local loopback server
 func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
 	// Try loading saved token first
-	if tok, err := a.LoadSavedToken(); err == nil && tok.Valid() {
-		return tok, nil
+	if tok, err := a.LoadSavedToken(); err == nil && tok != nil {
+		if tok.Valid() {
+			return tok, nil
+		}
+		// If token is expired but has a refresh token, silently refresh without opening browser!
+		if tok.RefreshToken != "" {
+			ctxWithHTTP := context.WithValue(ctx, oauth2.HTTPClient, a.httpClient)
+			ts := a.oauthCfg.TokenSource(ctxWithHTTP, tok)
+			if refreshed, err := ts.Token(); err == nil && refreshed.Valid() {
+				_ = a.SaveToken(refreshed)
+				return refreshed, nil
+			}
+		}
 	}
 
 	verifier, challenge, err := generatePKCE()
@@ -202,7 +219,7 @@ func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
 		WriteTimeout: 5 * time.Second,
 	}
 
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	callbackHandler := func(w http.ResponseWriter, r *http.Request) {
 		// Set secure response headers
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -249,7 +266,11 @@ p { color: #a6adc8; font-size: 14px; }
 </html>`))
 
 		codeChan <- code
-	})
+	}
+
+	mux.HandleFunc("/login", callbackHandler)
+	mux.HandleFunc("/callback", callbackHandler)
+	mux.HandleFunc("/", callbackHandler)
 
 	go func() {
 		_ = server.Serve(listener)

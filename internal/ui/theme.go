@@ -64,6 +64,7 @@ var (
 	StylePurple               lipgloss.Style
 	StyleLavender             lipgloss.Style
 	StyleMint                 lipgloss.Style
+	StylePeach                lipgloss.Style
 	StylePlaying              lipgloss.Style
 	StyleActiveFocused        lipgloss.Style
 	StyleActiveUnfocused      lipgloss.Style
@@ -93,6 +94,7 @@ func updateStyles() {
 	StylePurple = lipgloss.NewStyle().Foreground(CurrentTheme.Purple).Bold(true)
 	StyleLavender = lipgloss.NewStyle().Foreground(CurrentTheme.Lavender).Bold(true)
 	StyleMint = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true)
+	StylePeach = lipgloss.NewStyle().Foreground(CurrentTheme.Peach)
 	StylePlaying = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true)
 	StyleActiveFocused = lipgloss.NewStyle().Foreground(CurrentTheme.Purple).Bold(true)
 	StyleActiveUnfocused = lipgloss.NewStyle().Foreground(CurrentTheme.Lavender).Bold(true)

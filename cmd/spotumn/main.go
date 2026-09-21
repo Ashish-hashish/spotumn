@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
+	"spotumn/internal/art"
 	"spotumn/internal/auth"
 	"spotumn/internal/backend"
 	"spotumn/internal/config"
@@ -51,16 +52,28 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
+		if last := client.GetLastSavedState(); last != nil {
+			client.SaveLastState(last)
+		}
+		art.ClearGraphics()
 		daemon.Stop()
 		cancel()
 		os.Exit(0)
 	}()
+	defer art.ClearGraphics()
 
 	// Run Bubble Tea TUI
-	app := ui.NewAppModel(client)
+	app := ui.NewAppModel(client, cfg)
 	prog := tea.NewProgram(app)
 
-	if _, err := prog.Run(); err != nil {
+	finalModel, err := prog.Run()
+	if appModel, ok := finalModel.(*ui.AppModel); ok {
+		if pb := appModel.GetPlaybackState(); pb != nil && pb.CurrentTrack != nil {
+			client.SaveLastState(pb)
+		}
+	}
+
+	if err != nil {
 		daemon.Stop()
 		fmt.Fprintf(os.Stderr, "spotumn error: %v\n", err)
 		os.Exit(1)

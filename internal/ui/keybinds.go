@@ -35,10 +35,11 @@ var DefaultKeybinds = []KeybindCategory{
 		Items: []KeybindItem{
 			{"[ / ]", "Cycle pane focus (Nav -> Center -> Right -> Player)"},
 			{"j / k / ↑ / ↓", "Move cursor / navigate items"},
-			{"Enter", "Play selected track or seek to lyrics line"},
+			{"Enter", "Play track, open album, or seek lyrics"},
+			{"b / Backspace", "Go back to previous artist / container"},
 			{"1 / 2 / 3", "Switch tab: 1:Tracks, 2:History, 3:Lyrics"},
 			{"/", "Focus search bar (Esc to exit)"},
-			{"f / t", "Cycle playlist category (All/By You/Spotify/Saved)"},
+			{"f / t", "Cycle library filter (ALL / By Spotify / By You / Albums / Artists)"},
 			{"*", "Pin / unpin highlighted playlist (★ prefix)"},
 		},
 	},
@@ -46,7 +47,8 @@ var DefaultKeybinds = []KeybindCategory{
 		Title: "Layout & System",
 		Items: []KeybindItem{
 			{"Shift+H", "Hide focused sidebar (restores both if hidden)"},
-			{"z", "Toggle Zen mode (enlarged art + lyrics)"},
+			{"z", "Toggle Zen mode (fullscreen art & lyrics)"},
+			{"v", "Cycle Zen layout (Art+Lyrics / Art / Lyrics)"},
 			{"?", "Open / close this Keybindings window"},
 			{"Esc", "Close modal / reset lyrics scroll / exit search"},
 			{"Ctrl+C", "Quit spotumn"},

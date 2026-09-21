@@ -14,6 +14,7 @@ import (
 func RenderCenterLines(
 	currentTab CenterTab,
 	tracks []backend.Track,
+	albums []backend.Playlist,
 	history []backend.Track,
 	playlistName string,
 	currentPlayingTrackURI string,
@@ -53,7 +54,7 @@ func RenderCenterLines(
 	var bodyLines []string
 	switch currentTab {
 	case TabTracks:
-		bodyLines = renderTracks(tracks, playlistName, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
+		bodyLines = renderTracks(tracks, albums, playlistName, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
 	case TabHistory:
 		bodyLines = renderHistory(history, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
 	case TabLyrics:
@@ -76,6 +77,7 @@ func RenderCenterLines(
 func RenderCenter(
 	currentTab CenterTab,
 	tracks []backend.Track,
+	albums []backend.Playlist,
 	history []backend.Track,
 	playlistName string,
 	currentPlayingTrackURI string,
@@ -100,6 +102,7 @@ func RenderCenter(
 	lines := RenderCenterLines(
 		currentTab,
 		tracks,
+		albums,
 		history,
 		playlistName,
 		currentPlayingTrackURI,
@@ -227,26 +230,64 @@ func renderTrackRow(idx int, t backend.Track, isSelected bool, isPlaying bool, f
 	return rowContent
 }
 
-// renderTracks renders a clean tracks table with scrolling and colored block row highlighting
+// renderAlbumRow renders a single album row in an artist's discography section
+func renderAlbumRow(idx int, a backend.Playlist, isSelected bool, focused bool, titleW, descW, countW int, width int) string {
+	iconCol := " 💿 "
+	titleCol := TruncateString(a.Name, titleW-1)
+	titleCol += strings.Repeat(" ", titleW-ansi.StringWidth(titleCol))
+
+	descCol := TruncateString(a.OwnerID, descW-1)
+	descCol += strings.Repeat(" ", descW-ansi.StringWidth(descCol))
+
+	countStr := fmt.Sprintf("%d tracks", a.TrackCount)
+	if a.TrackCount == 1 {
+		countStr = "1 track"
+	} else if a.TrackCount == 0 {
+		countStr = ""
+	}
+	countCol := TruncateString(countStr, countW)
+	countCol += strings.Repeat(" ", countW-ansi.StringWidth(countCol))
+
+	rawRow := iconCol + titleCol + descCol + countCol
+
+	if isSelected && focused {
+		return RenderPaddedLine(rawRow, StyleActiveFocusedBlock, width)
+	} else if isSelected {
+		return RenderPaddedLine(rawRow, StyleActiveUnfocusedBlock, width)
+	}
+
+	iconStyled := StyleLavender.Render(iconCol)
+	titleStyled := StyleBold.Render(titleCol)
+	descStyled := StylePeach.Render(descCol)
+	countStyled := StyleFaint.Render(countCol)
+
+	rowContent := iconStyled + titleStyled + descStyled + countStyled
+	remPad := width - ansi.StringWidth(rowContent)
+	if remPad > 0 {
+		rowContent += strings.Repeat(" ", remPad)
+	}
+	return rowContent
+}
+
+// renderTracks renders a clean tracks table with scrolling, colored block row highlighting, and albums section for artist pages
 func renderTracks(
 	tracks []backend.Track,
+	albums []backend.Playlist,
 	playlistName string,
 	currentPlayingURI string,
 	selectedIndex int,
 	focused bool,
 	width, height int,
 ) []string {
-	var lines []string
-
-	title := "Tracks"
-	if playlistName != "" {
-		title = "♫ " + playlistName
-	}
-	titleHeader := StylePurple.Render("  " + title)
-	lines = append(lines, PadToWidth(titleHeader, width))
-
-	if len(tracks) == 0 {
-		emptyMsg := StyleFaint.Render("No tracks in this playlist. Select a playlist or press [/] to search.")
+	if len(tracks) == 0 && len(albums) == 0 {
+		var lines []string
+		title := "Tracks"
+		if playlistName != "" {
+			title = "♫ " + playlistName
+		}
+		titleHeader := StylePurple.Render("  " + title)
+		lines = append(lines, PadToWidth(titleHeader, width))
+		emptyMsg := StyleFaint.Render("No tracks or albums found. Select a playlist or press [/] to search.")
 		lines = append(lines, PadToWidth("", width))
 		lines = append(lines, PadToWidth("  "+emptyMsg, width))
 		return lines
@@ -261,38 +302,108 @@ func renderTracks(
 	titleW := remW * 55 / 100
 	artistW := remW - titleW
 
-	headerNum := PadToWidth(" #", numW)
-	headerTitle := PadToWidth("Title", titleW)
-	headerArtist := PadToWidth("Artist", artistW)
-	headerDuration := PadToWidth("Time", durW)
+	var allVisualLines []string
+	selectedLineIdx := 0
 
-	tableHeader := StyleLavender.Render(headerNum + headerTitle + headerArtist + headerDuration)
-	lines = append(lines, PadToWidth(tableHeader, width))
-	lines = append(lines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
+	if len(albums) > 0 {
+		// Artist Page: Top Tracks + Albums Discography
+		title := "♫ " + playlistName
+		titleHeader := StylePurple.Render("  " + title)
+		allVisualLines = append(allVisualLines, PadToWidth(titleHeader, width))
 
-	availRows := height - len(lines)
+		if len(tracks) > 0 {
+			allVisualLines = append(allVisualLines, PadToWidth("", width))
+			allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render("  ♪ Top Tracks"), width))
+			headerNum := PadToWidth(" #", numW)
+			headerTitle := PadToWidth("Title", titleW)
+			headerArtist := PadToWidth("Artist", artistW)
+			headerDuration := PadToWidth("Time", durW)
+			tableHeader := StyleFaint.Render(headerNum + headerTitle + headerArtist + headerDuration)
+			allVisualLines = append(allVisualLines, PadToWidth(tableHeader, width))
+			allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
+
+			for idx, t := range tracks {
+				if idx == selectedIndex {
+					selectedLineIdx = len(allVisualLines)
+				}
+				isSelected := idx == selectedIndex
+				isPlaying := t.URI == currentPlayingURI && currentPlayingURI != ""
+				lineContent := renderTrackRow(idx, t, isSelected, isPlaying, focused, titleW, artistW, width)
+				allVisualLines = append(allVisualLines, lineContent)
+			}
+		}
+
+		// Albums Section
+		iconW := 4
+		countW := 12
+		remAlbW := width - iconW - countW - 4
+		if remAlbW < 20 {
+			remAlbW = 20
+		}
+		albTitleW := remAlbW * 55 / 100
+		albDescW := remAlbW - albTitleW
+
+		allVisualLines = append(allVisualLines, PadToWidth("", width))
+		allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render("  ── 💿 Albums & Discography ──────────────────────────────────────────"), width))
+		albHeader := StyleFaint.Render("    " + PadToWidth("Album", albTitleW) + PadToWidth("Type • Year", albDescW) + PadToWidth("Tracks", countW))
+		allVisualLines = append(allVisualLines, PadToWidth(albHeader, width))
+		allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
+
+		for aIdx, a := range albums {
+			itemIdx := len(tracks) + aIdx
+			if itemIdx == selectedIndex {
+				selectedLineIdx = len(allVisualLines)
+			}
+			isSelected := itemIdx == selectedIndex
+			lineContent := renderAlbumRow(aIdx, a, isSelected, focused, albTitleW, albDescW, countW, width)
+			allVisualLines = append(allVisualLines, lineContent)
+		}
+	} else {
+		// Standard Playlist or Single Album View
+		title := "Tracks"
+		if playlistName != "" {
+			title = "♫ " + playlistName
+		}
+		titleHeader := StylePurple.Render("  " + title)
+		allVisualLines = append(allVisualLines, PadToWidth(titleHeader, width))
+
+		headerNum := PadToWidth(" #", numW)
+		headerTitle := PadToWidth("Title", titleW)
+		headerArtist := PadToWidth("Artist", artistW)
+		headerDuration := PadToWidth("Time", durW)
+		tableHeader := StyleLavender.Render(headerNum + headerTitle + headerArtist + headerDuration)
+		allVisualLines = append(allVisualLines, PadToWidth(tableHeader, width))
+		allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
+
+		for idx, t := range tracks {
+			if idx == selectedIndex {
+				selectedLineIdx = len(allVisualLines)
+			}
+			isSelected := idx == selectedIndex
+			isPlaying := t.URI == currentPlayingURI && currentPlayingURI != ""
+			lineContent := renderTrackRow(idx, t, isSelected, isPlaying, focused, titleW, artistW, width)
+			allVisualLines = append(allVisualLines, lineContent)
+		}
+	}
+
+	availRows := height
 	if availRows < 1 {
 		availRows = 1
 	}
 
 	scrollOffset := 0
-	if selectedIndex >= availRows {
-		scrollOffset = selectedIndex - availRows + 1
+	if selectedLineIdx >= availRows {
+		scrollOffset = selectedLineIdx - availRows + 1
 	}
 
+	var lines []string
 	for i := 0; i < availRows; i++ {
-		idx := scrollOffset + i
-		if idx >= len(tracks) {
+		lineIdx := scrollOffset + i
+		if lineIdx < len(allVisualLines) {
+			lines = append(lines, allVisualLines[lineIdx])
+		} else {
 			lines = append(lines, PadToWidth("", width))
-			continue
 		}
-
-		t := tracks[idx]
-		isSelected := idx == selectedIndex
-		isPlaying := t.URI == currentPlayingURI && currentPlayingURI != ""
-
-		lineContent := renderTrackRow(idx, t, isSelected, isPlaying, focused, titleW, artistW, width)
-		lines = append(lines, lineContent)
 	}
 
 	return lines

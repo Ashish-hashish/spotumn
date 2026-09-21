@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"testing"
+
+	"spotumn/internal/config"
 )
 
 func TestGeneratePKCE(t *testing.T) {
@@ -51,3 +53,26 @@ func TestGenerateRandomBytes(t *testing.T) {
 		t.Fatal("two random byte slices should not be identical")
 	}
 }
+
+func TestRedirectURIDefault(t *testing.T) {
+	cfg := &config.Config{
+		ClientID: "test",
+		Port:     8989,
+	}
+	svc := NewAuthService(cfg)
+	if svc.oauthCfg.RedirectURL != "http://127.0.0.1:8989/login" {
+		t.Errorf("expected redirect URL 'http://127.0.0.1:8989/login', got '%s'", svc.oauthCfg.RedirectURL)
+	}
+
+	cfgCustom := &config.Config{
+		ClientID:    "test",
+		Port:        8989,
+		RedirectURI: "http://127.0.0.1:8989/custom",
+	}
+	svcCustom := NewAuthService(cfgCustom)
+	if svcCustom.oauthCfg.RedirectURL != "http://127.0.0.1:8989/custom" {
+		t.Errorf("expected redirect URL 'http://127.0.0.1:8989/custom', got '%s'", svcCustom.oauthCfg.RedirectURL)
+	}
+}
+
+
