@@ -34,6 +34,20 @@ func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScann
 		sb.WriteString(PadToWidth(emptyMsg, modalW-2) + "\n\n")
 	} else {
 		for i, d := range devices {
+			if strings.EqualFold(d.Name, "spotumn") {
+				if i > 0 {
+					devCopy := make([]spotify.PlayerDevice, len(devices))
+					copy(devCopy, devices)
+					spotDev := devCopy[i]
+					copy(devCopy[1:i+1], devCopy[0:i])
+					devCopy[0] = spotDev
+					devices = devCopy
+				}
+				break
+			}
+		}
+
+		for i, d := range devices {
 			isSelected := i == selectedIdx
 			prefix := "  "
 			if isSelected {

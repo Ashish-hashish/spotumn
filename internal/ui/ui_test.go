@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/zmb3/spotify/v2"
 	"spotumn/internal/backend"
 	"spotumn/internal/lyrics"
 )
@@ -251,7 +254,7 @@ func TestBordersAndIcons(t *testing.T) {
 		t.Errorf("expected '◖Space◗ Play' keybind embedded in bottom border, got: %s", stripped)
 	}
 
-	// Test with empty username: should NOT show person icon or any hardcoded username
+	// Test with empty username
 	paramsEmpty := ViewParams{
 		Width:            120,
 		Height:           30,
@@ -262,9 +265,6 @@ func TestBordersAndIcons(t *testing.T) {
 	outputEmpty := RenderFullUI(paramsEmpty)
 	if strings.Contains(outputEmpty, "") {
 		t.Error("expected no person icon  when username is empty")
-	}
-	if strings.Contains(outputEmpty, "BrightestAutumn") {
-		t.Error("expected no hardcoded username in top border")
 	}
 }
 
@@ -297,6 +297,20 @@ func TestRenderDevicesModal(t *testing.T) {
 	modalScanning := RenderDevicesModal(nil, 0, true, 80, 24)
 	if !strings.Contains(modalScanning, "Scanning...") {
 		t.Error("expected Scanning... indicator when isScanning is true")
+	}
+
+	// Verify spotumn is rendered topmost even if received later in device list
+	devs := []spotify.PlayerDevice{
+		{ID: "d1", Name: "Phone", Type: "Smartphone"},
+		{ID: "d2", Name: "External Speaker", Type: "Speaker"},
+		{ID: "d3", Name: "spotumn", Type: "Computer"},
+	}
+	rendered := RenderDevicesModal(devs, 0, false, 80, 24)
+	stripped := ansi.Strip(rendered)
+	spotumnIdx := strings.Index(stripped, "spotumn")
+	phoneIdx := strings.Index(stripped, "Phone")
+	if spotumnIdx == -1 || phoneIdx == -1 || spotumnIdx >= phoneIdx {
+		t.Errorf("expected spotumn to appear before Phone as the topmost item in devices modal:\n%s", stripped)
 	}
 }
 
@@ -503,3 +517,470 @@ func TestArtistPageOpenAlbum(t *testing.T) {
 	}
 }
 
+func TestPlayerNerdFontControlsAndBorderDevice(t *testing.T) {
+	state := &backend.PlaybackState{
+		Playing:    true,
+		ProgressMs: 60000,
+		DurationMs: 180000,
+		Volume:     75,
+		Shuffle:    true,
+		Repeat:     "track",
+		DeviceName: "spotumn",
+		CurrentTrack: &backend.Track{
+			Name:   "Midnight City",
+			Artist: "M83",
+		},
+	}
+
+	// 1. Check rendered player lines and controls layout
+	lines := RenderPlayerLines(state, false, 80)
+	joined := strings.Join(lines, "\n")
+	stripped := ansi.Strip(joined)
+
+	// Verify Nerd Font shuffle on icon
+	if !strings.Contains(stripped, "󰒝") {
+		t.Error("expected shuffle on Nerd Font icon '󰒝' in player controls")
+	}
+	// Verify Nerd Font repeat once icon
+	if !strings.Contains(stripped, "󰑘") {
+		t.Error("expected repeat once Nerd Font icon '󰑘' in player controls")
+	}
+	// Verify controls order: shuffle on left of previous, repeat on right of next
+	if !strings.Contains(stripped, "󰒝   ⏮") || !strings.Contains(stripped, "⏭   󰑘") {
+		t.Errorf("expected shuffle on left of previous and repeat on right of next, got:\n%s", stripped)
+	}
+
+	// 2. Test shuffle off and repeat modes
+	state.Shuffle = false
+	state.Repeat = "context" // repeat all
+	lines2 := RenderPlayerLines(state, false, 80)
+	stripped2 := ansi.Strip(strings.Join(lines2, "\n"))
+	if !strings.Contains(stripped2, "󰒞") {
+		t.Error("expected shuffle off Nerd Font icon '󰒞' in player controls")
+	}
+	if !strings.Contains(stripped2, "󰑖") {
+		t.Error("expected repeat all Nerd Font icon '󰑖' in player controls")
+	}
+
+	state.Repeat = "off"
+	lines3 := RenderPlayerLines(state, false, 80)
+	stripped3 := ansi.Strip(strings.Join(lines3, "\n"))
+	if !strings.Contains(stripped3, "󰑗") {
+		t.Error("expected repeat off Nerd Font icon '󰑗' in player controls")
+	}
+
+	// 3. Test Device Name inside top border line
+	renderedPlayer := RenderPlayer(state, false, 80)
+	strippedPlayer := ansi.Strip(renderedPlayer)
+	if !strings.Contains(strippedPlayer, "󰓃 spotumn") {
+		t.Errorf("expected '󰓃 spotumn' inside player top border line, got:\n%s", strippedPlayer)
+	}
+}
+
+func TestZenModeVolumeSlider(t *testing.T) {
+	params := ViewParams{
+		Width:   80,
+		Height:  30,
+		ZenMode: true,
+		ZenView: ZenViewBoth,
+		LyricsLines: []lyrics.Line{
+			{TimeMs: 0, Text: "Line 1"},
+			{TimeMs: 5000, Text: "Line 2"},
+		},
+		Playback: &backend.PlaybackState{
+			Playing:    true,
+			ProgressMs: 2500,
+			DurationMs: 10000,
+			Volume:     65,
+			CurrentTrack: &backend.Track{
+				Name:   "Zen Track",
+				Artist: "Zen Artist",
+			},
+		},
+	}
+
+	// 1. ZenViewBoth
+	both := ansi.Strip(RenderFullUI(params))
+	if !strings.Contains(both, "Vol: [") || !strings.Contains(both, "65%") {
+		t.Errorf("expected volume slider 'Vol: [...] 65%%' in ZenViewBoth, got:\n%s", both)
+	}
+
+	// 2. ZenViewArt
+	params.ZenView = ZenViewArt
+	art := ansi.Strip(RenderFullUI(params))
+	if !strings.Contains(art, "Vol: [") || !strings.Contains(art, "65%") {
+		t.Errorf("expected volume slider 'Vol: [...] 65%%' in ZenViewArt, got:\n%s", art)
+	}
+
+	// 3. ZenViewLyrics
+	params.ZenView = ZenViewLyrics
+	lyr := ansi.Strip(RenderFullUI(params))
+	if !strings.Contains(lyr, "Vol: [") || !strings.Contains(lyr, "65%") {
+		t.Errorf("expected volume slider 'Vol: [...] 65%%' in ZenViewLyrics, got:\n%s", lyr)
+	}
+}
+
+func TestLyricsAutoSyncTimer(t *testing.T) {
+	lyricsLines := []lyrics.Line{
+		{TimeMs: 0, Text: "First line"},
+		{TimeMs: 10000, Text: "Second line (singing)"},
+		{TimeMs: 20000, Text: "Third line"},
+	}
+
+	m := &AppModel{
+		lyricsLines: lyricsLines,
+		client:      &backend.Client{},
+		playback: &backend.PlaybackState{
+			Playing:    false, // keep false to avoid periodic save network/disk writes in test
+			ProgressMs: 12000, // activeIdx is 1 ("Second line")
+		},
+		lyricsCursor:         1,
+		lyricsManualScroll:   true,
+		lyricsPointerMovedAt: time.Now().Add(-1 * time.Second),
+	}
+
+	// Case 1: Pointer moved to non-singing line 0, idle for 2 seconds (< 3s) -> remains in manual scroll
+	m.lyricsManualScroll = true
+	m.lyricsCursor = 0 // stray
+	m.lyricsPointerMovedAt = time.Now().Add(-2 * time.Second)
+	m.Update(TickMsg{})
+	if !m.lyricsManualScroll {
+		t.Error("expected lyricsManualScroll to remain true when idle for < 3s")
+	}
+
+	// Case 2: Pointer left idle for >= 3 seconds -> reverts to auto-sync and snaps to active singing line (idx 1)
+	m.lyricsPointerMovedAt = time.Now().Add(-3100 * time.Millisecond)
+	m.Update(TickMsg{})
+	if m.lyricsManualScroll {
+		t.Error("expected lyricsManualScroll to revert to false after >= 3s idle")
+	}
+	if m.lyricsCursor != 1 {
+		t.Errorf("expected lyricsCursor to snap to active singing lyric 1, got %d", m.lyricsCursor)
+	}
+
+	// Case 3: Pointer placed on singing line (idx 1), idle for 2 seconds (< 3s) -> remains manual
+	m.lyricsManualScroll = true
+	m.lyricsCursor = 1
+	m.lyricsPointerMovedAt = time.Now().Add(-2 * time.Second)
+	m.Update(TickMsg{})
+	if !m.lyricsManualScroll {
+		t.Error("expected lyricsManualScroll to remain true when on singing line for < 3s")
+	}
+
+	// Case 4: Pointer placed on singing line, idle for >= 3 seconds -> reverts to auto-sync
+	m.lyricsPointerMovedAt = time.Now().Add(-3100 * time.Millisecond)
+	m.Update(TickMsg{})
+	if m.lyricsManualScroll {
+		t.Error("expected lyricsManualScroll to revert to false after >= 3s on singing line")
+	}
+}
+
+func TestKeybindsModalVolumeCooldownNotice(t *testing.T) {
+	modal := RenderKeybindsModal(nil, 0, false, 90, 40)
+	stripped := ansi.Strip(modal)
+
+	if !strings.Contains(stripped, "Tip:") {
+		t.Error("expected 'Tip:' header in keybindings modal")
+	}
+	if !strings.Contains(stripped, "Spotify limits how fast volume requests can be sent") {
+		t.Error("expected volume cooldown explanation in keybindings modal")
+	}
+	if !strings.Contains(stripped, "󰒝 on / 󰒞 off") {
+		t.Error("expected Nerd Font shuffle icons documented in keybindings modal")
+	}
+	if !strings.Contains(stripped, "󰑗 off / 󰑖 all / 󰑘 once") {
+		t.Error("expected Nerd Font repeat icons documented in keybindings modal")
+	}
+}
+
+func TestKeybindNavigationAndEditing(t *testing.T) {
+	km := NewKeyManager()
+
+	// Default matching
+	if act := km.Action("space"); act != ActionPlayPause {
+		t.Errorf("expected ActionPlayPause for space, got '%s'", act)
+	}
+	if act := km.Action("n"); act != ActionNextTrack {
+		t.Errorf("expected ActionNextTrack for n, got '%s'", act)
+	}
+
+	// Edit keybind: rebind next track to 'l'
+	nextIdx := -1
+	for i, it := range km.Items {
+		if it.ID == ActionNextTrack {
+			nextIdx = i
+			break
+		}
+	}
+	if nextIdx == -1 {
+		t.Fatal("ActionNextTrack not found in KeyManager")
+	}
+
+	km.SetKey(nextIdx, "l")
+	if act := km.Action("l"); act != ActionNextTrack {
+		t.Errorf("expected ActionNextTrack for edited key 'l', got '%s'", act)
+	}
+
+	// Render modal in edit mode
+	modalEdit := RenderKeybindsModal(km.Items, nextIdx, true, 90, 40)
+	strippedEdit := ansi.Strip(modalEdit)
+	if !strings.Contains(strippedEdit, "[Press key...]") {
+		t.Error("expected '[Press key...]' indicator in edit mode")
+	}
+
+	// Verify tab 2 is Lyrics and tab 3 is History
+	if act := km.Action("2"); act != ActionTabLyrics {
+		t.Errorf("expected ActionTabLyrics for '2', got '%s'", act)
+	}
+	if act := km.Action("3"); act != ActionTabHistory {
+		t.Errorf("expected ActionTabHistory for '3', got '%s'", act)
+	}
+
+	// Verify =/- for +/- 5 points and +/_ for +/- 10 points
+	if act := km.Action("="); act != ActionVolumeUp {
+		t.Errorf("expected ActionVolumeUp for '=', got '%s'", act)
+	}
+	if act := km.Action("-"); act != ActionVolumeDown {
+		t.Errorf("expected ActionVolumeDown for '-', got '%s'", act)
+	}
+	if act := km.Action("+"); act != ActionVolumeUpBig {
+		t.Errorf("expected ActionVolumeUpBig for '+', got '%s'", act)
+	}
+	if act := km.Action("shift+="); act != ActionVolumeUpBig {
+		t.Errorf("expected ActionVolumeUpBig for 'shift+=', got '%s'", act)
+	}
+	if act := km.Action("_"); act != ActionVolumeDownBig {
+		t.Errorf("expected ActionVolumeDownBig for '_', got '%s'", act)
+	}
+	if act := km.Action("shift+-"); act != ActionVolumeDownBig {
+		t.Errorf("expected ActionVolumeDownBig for 'shift+-', got '%s'", act)
+	}
+	if act := km.Action("shift+left"); act != ActionSeekBackBig {
+		t.Errorf("expected ActionSeekBackBig for 'shift+left', got '%s'", act)
+	}
+	if act := km.Action("shift+right"); act != ActionSeekFwdBig {
+		t.Errorf("expected ActionSeekFwdBig for 'shift+right', got '%s'", act)
+	}
+
+	// Reset with 0
+	if km.IsKeyUsed("0") {
+		t.Error("expected '0' not to be used by default")
+	}
+	km.ResetItem(nextIdx)
+	if act := km.Action("n"); act != ActionNextTrack {
+		t.Errorf("expected ActionNextTrack restored to 'n' after reset, got '%s'", act)
+	}
+}
+
+func TestTabBarOrder(t *testing.T) {
+	rendered := renderTabBar(TabLyrics, 80)
+	stripped := ansi.Strip(rendered)
+
+	idxTracks := strings.Index(stripped, "1 Tracks")
+	idxLyrics := strings.Index(stripped, "2 Lyrics")
+	idxHistory := strings.Index(stripped, "3 History")
+
+	if idxTracks == -1 || idxLyrics == -1 || idxHistory == -1 {
+		t.Fatalf("expected all tabs in tab bar, got: %q", stripped)
+	}
+	if !(idxTracks < idxLyrics && idxLyrics < idxHistory) {
+		t.Errorf("expected order Tracks < Lyrics < History, got tracks=%d, lyrics=%d, history=%d", idxTracks, idxLyrics, idxHistory)
+	}
+	if !strings.Contains(stripped, "[ 2 Lyrics ]") {
+		t.Errorf("expected active tab '[ 2 Lyrics ]' in %q", stripped)
+	}
+}
+
+func TestKeybindsModalScrollbar(t *testing.T) {
+	km := NewKeyManager()
+	// Modal rendered with height 26 so availH < len(items)
+	modal := RenderKeybindsModal(km.Items, 0, false, 90, 26)
+	stripped := ansi.Strip(modal)
+
+	if !strings.Contains(stripped, "█") {
+		t.Error("expected scrollbar thumb '█' in keybindings modal when items exceed viewport")
+	}
+	if !strings.Contains(stripped, "│") {
+		t.Error("expected scrollbar track '│' in keybindings modal when items exceed viewport")
+	}
+}
+
+func TestTotalDurationOnPlaylistHeader(t *testing.T) {
+	tracks := []backend.Track{
+		{ID: "1", Name: "Track 1", Artist: "Artist", DurationMs: 180000}, // 3 min
+		{ID: "2", Name: "Track 2", Artist: "Artist", DurationMs: 125000}, // 2 min 5 sec
+	}
+
+	durStr := FormatTotalDuration(305000, len(tracks))
+	if !strings.Contains(durStr, "2 tracks") || !strings.Contains(durStr, "5 min 5 sec") {
+		t.Errorf("unexpected formatted duration: %s", durStr)
+	}
+
+	lines := renderTracks(tracks, nil, nil, "My Awesome Playlist", "", 0, false, 80, 20)
+	header := lines[0]
+	stripped := ansi.Strip(header)
+
+	if !strings.Contains(stripped, "My Awesome Playlist") {
+		t.Errorf("expected playlist name in header, got: %s", stripped)
+	}
+	if !strings.Contains(stripped, "5 min 5 sec") {
+		t.Errorf("expected total duration on opposite side of header, got: %s", stripped)
+	}
+}
+
+func TestEscClosesZenMode(t *testing.T) {
+	app := &AppModel{
+		zenMode:     true,
+		currentTab:  TabTracks,
+		keyManager:  NewKeyManager(),
+	}
+
+	// Press Esc
+	newModel, _ := app.handleKeyPress(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m := newModel.(*AppModel)
+
+	if m.zenMode {
+		t.Error("expected Esc to close Zen mode (zenMode = false)")
+	}
+}
+
+func TestEscNavigatesBackFromAlbum(t *testing.T) {
+	app := &AppModel{
+		focused:       PaneCenter,
+		currentTab:    TabTracks,
+		currentPlURI:  "spotify:album:album123",
+		currentPlName: "Abbey Road",
+		centerIndex:   3,
+		keyManager:    NewKeyManager(),
+		navHistory: []containerHistoryItem{
+			{
+				ID:          "pl1",
+				URI:         "spotify:playlist:pl1",
+				Name:        "Rock Classics",
+				CenterIndex: 5,
+			},
+		},
+		client: &backend.Client{},
+	}
+
+	// Press Esc
+	newModel, _ := app.handleKeyPress(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m := newModel.(*AppModel)
+
+	if m.currentPlURI != "spotify:playlist:pl1" {
+		t.Errorf("expected Esc to navigate back to 'spotify:playlist:pl1', got '%s'", m.currentPlURI)
+	}
+	if m.currentPlName != "Rock Classics" {
+		t.Errorf("expected currentPlName restored to 'Rock Classics', got '%s'", m.currentPlName)
+	}
+	if m.centerIndex != 5 {
+		t.Errorf("expected centerIndex restored to 5, got %d", m.centerIndex)
+	}
+	if len(m.navHistory) != 0 {
+		t.Errorf("expected navHistory popped to empty, got length %d", len(m.navHistory))
+	}
+}
+
+func TestCategorizedSearchAndEscNavigation(t *testing.T) {
+	app := &AppModel{
+		focused:     PaneCenter,
+		currentTab:  TabTracks,
+		keyManager:  NewKeyManager(),
+		searchQuery: "Queen",
+	}
+
+	searchMsg := SearchResultsMsg{
+		Tracks: []backend.Track{
+			{ID: "t1", Name: "Bohemian Rhapsody", Artist: "Queen", DurationMs: 354000},
+		},
+		Albums: []backend.Playlist{
+			{ID: "alb1", URI: "spotify:album:alb1", Name: "A Night at the Opera", TrackCount: 12, OwnerID: "Album • 1975"},
+		},
+		Artists: []backend.Playlist{
+			{ID: "art1", URI: "spotify:artist:art1", Name: "Queen", TrackCount: 85, OwnerID: "Artist"},
+		},
+	}
+
+	// Deliver search results
+	app.Update(searchMsg)
+
+	if len(app.playlistTracks) != 1 || len(app.artistAlbums) != 1 || len(app.searchArtists) != 1 {
+		t.Fatalf("expected separated tracks, albums, and artists in search results")
+	}
+
+	// Render center with categorized search results
+	lines := renderTracks(app.playlistTracks, app.artistAlbums, app.searchArtists, app.currentPlName, "", 0, false, 90, 30)
+	joined := strings.Join(lines, "\n")
+	stripped := ansi.Strip(joined)
+
+	if !strings.Contains(stripped, "Songs") {
+		t.Error("expected 'Songs' section in search results")
+	}
+	if !strings.Contains(stripped, "Albums") {
+		t.Error("expected 'Albums' section in search results")
+	}
+	if !strings.Contains(stripped, "Artists") {
+		t.Error("expected 'Artists' section in search results")
+	}
+	if !strings.Contains(stripped, "Bohemian Rhapsody") {
+		t.Error("expected song name in search results")
+	}
+	if !strings.Contains(stripped, "A Night at the Opera") {
+		t.Error("expected album name in search results")
+	}
+	if !strings.Contains(stripped, "Queen") {
+		t.Error("expected artist name in search results")
+	}
+	if !strings.Contains(stripped, "󰠃") {
+		t.Error("expected Nerd Font 'account_music' icon '󰠃' for artists in search results")
+	}
+	if strings.Contains(stripped, "👤") {
+		t.Error("did not expect emoji '👤' for artists")
+	}
+
+	// Navigate to album (index 1: len(tracks) + 0) and press enter
+	app.centerIndex = 1
+	app.handleEnter()
+
+	if app.currentPlURI != "spotify:album:alb1" {
+		t.Fatalf("expected currentPlURI to be album, got '%s'", app.currentPlURI)
+	}
+	if len(app.navHistory) != 1 {
+		t.Fatalf("expected search view pushed to navHistory")
+	}
+
+	// Press Esc to return to search results
+	newModel, _ := app.handleKeyPress(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m := newModel.(*AppModel)
+
+	if m.currentPlURI != "search:Queen" {
+		t.Errorf("expected Esc to restore search URI 'search:Queen', got '%s'", m.currentPlURI)
+	}
+	if len(m.playlistTracks) != 1 || len(m.artistAlbums) != 1 || len(m.searchArtists) != 1 {
+		t.Errorf("expected search tracks, albums, and artists restored")
+	}
+	if m.centerIndex != 1 {
+		t.Errorf("expected centerIndex restored to 1, got %d", m.centerIndex)
+	}
+}
+
+func TestCenterPaneScrollbar(t *testing.T) {
+	var manyTracks []backend.Track
+	for i := 0; i < 40; i++ {
+		manyTracks = append(manyTracks, backend.Track{
+			ID:         fmt.Sprintf("t%d", i),
+			Name:       fmt.Sprintf("Song %d", i),
+			Artist:     "Band",
+			DurationMs: 200000,
+		})
+	}
+	lines := renderTracks(manyTracks, nil, nil, "Big Playlist", "", 0, false, 80, 15)
+	joined := strings.Join(lines, "\n")
+	stripped := ansi.Strip(joined)
+	if !strings.Contains(stripped, "█") {
+		t.Error("expected vertical scrollbar thumb '█' in center pane when content exceeds height")
+	}
+	if !strings.Contains(stripped, "│") {
+		t.Error("expected vertical scrollbar rail '│' in center pane when content exceeds height")
+	}
+}

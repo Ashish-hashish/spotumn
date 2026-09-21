@@ -56,16 +56,17 @@ func TestGenerateRandomBytes(t *testing.T) {
 
 func TestRedirectURIDefault(t *testing.T) {
 	cfg := &config.Config{
-		ClientID: "test",
-		Port:     8989,
+		Port: 8989,
 	}
 	svc := NewAuthService(cfg)
 	if svc.oauthCfg.RedirectURL != "http://127.0.0.1:8989/login" {
 		t.Errorf("expected redirect URL 'http://127.0.0.1:8989/login', got '%s'", svc.oauthCfg.RedirectURL)
 	}
+	if svc.oauthCfg.ClientID != config.SpotifyClientID {
+		t.Errorf("expected built-in ClientID '%s', got '%s'", config.SpotifyClientID, svc.oauthCfg.ClientID)
+	}
 
 	cfgCustom := &config.Config{
-		ClientID:    "test",
 		Port:        8989,
 		RedirectURI: "http://127.0.0.1:8989/custom",
 	}

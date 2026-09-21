@@ -61,7 +61,7 @@ func NewAuthService(cfg *config.Config) *AuthService {
 		redirectURI = fmt.Sprintf("http://127.0.0.1:%d/login", cfg.Port)
 	}
 	oauthCfg := &oauth2.Config{
-		ClientID: cfg.ClientID,
+		ClientID: config.SpotifyClientID,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  SpotifyAuthURL,
 			TokenURL: SpotifyTokenURL,
@@ -309,7 +309,7 @@ func (a *AuthService) exchangePKCE(ctx context.Context, code, verifier string) (
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"redirect_uri":  {a.oauthCfg.RedirectURL},
-		"client_id":     {a.cfg.ClientID},
+		"client_id":     {config.SpotifyClientID},
 		"code_verifier": {verifier},
 	}
 

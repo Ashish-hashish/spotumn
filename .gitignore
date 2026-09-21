@@ -15,6 +15,13 @@ dist/
 # Output of the go coverage tool
 *.out
 
+# Cache
+*credentials*.json
+last_state.json
+cache/
+art_cache/
+*.log
+
 # OS / Editor temporary files
 .DS_Store
 .vscode/

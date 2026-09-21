@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
-	"spotumn/internal/art"
 	"spotumn/internal/auth"
 	"spotumn/internal/backend"
 	"spotumn/internal/config"
@@ -31,7 +30,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Authenticate via PKCE OAuth2
+	// Authenticate via Spotify OAuth PKCE
 	authService := auth.NewAuthService(cfg)
 	if _, err := authService.Authorize(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "spotumn: authorization failed: %v\n", err)
@@ -55,12 +54,10 @@ func main() {
 		if last := client.GetLastSavedState(); last != nil {
 			client.SaveLastState(last)
 		}
-		art.ClearGraphics()
 		daemon.Stop()
 		cancel()
 		os.Exit(0)
 	}()
-	defer art.ClearGraphics()
 
 	// Run Bubble Tea TUI
 	app := ui.NewAppModel(client, cfg)

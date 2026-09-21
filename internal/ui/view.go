@@ -41,6 +41,9 @@ type ViewParams struct {
 	ZenMode          bool
 	ZenView          ZenViewMode
 	ShowHelp         bool
+	HelpIndex        int
+	HelpEditing      bool
+	KeybindItems     []KeybindItem
 	ShowDevices      bool
 	DeviceScanning   bool
 	Devices          []spotify.PlayerDevice
@@ -57,6 +60,7 @@ type ViewParams struct {
 	PlaylistFilter   PlaylistFilter
 	PlaylistTracks   []backend.Track
 	ArtistAlbums     []backend.Playlist
+	SearchArtists    []backend.Playlist
 	PlaylistName     string
 	History          []backend.Track
 	Playback         *backend.PlaybackState
@@ -111,130 +115,70 @@ func RenderFullUI(p ViewParams) string {
 		}
 	}
 
-	var bodyContent string
-
+	var navW, rightW int
 	if p.ShowLeftSidebar && p.ShowRightSidebar {
-		navW := innerW * 28 / 100
+		navW = innerW * 28 / 100
 		if navW < 30 {
 			navW = 30
 		}
 		if navW > 45 {
 			navW = 45
 		}
-
-		rightW := innerW * 34 / 100
+		rightW = innerW * 34 / 100
 		if rightW < 34 {
 			rightW = 34
 		}
 		if rightW > 50 {
 			rightW = 50
 		}
-
-		centerW := innerW - navW - rightW
-		if centerW < 20 {
-			centerW = 20
-		}
-
-		navView := RenderNav(p.Playlists, p.PinnedURIs, p.PlaylistFilter, p.NavIndex, p.Focused == PaneNav, navW, bodyH)
-		centerView := RenderCenter(
-			p.CurrentTab,
-			p.PlaylistTracks,
-			p.ArtistAlbums,
-			p.History,
-			p.PlaylistName,
-			curURI,
-			p.LyricsLines,
-			p.LyricsCursor,
-			curProgress,
-			p.SearchQuery,
-			p.SearchFocused,
-			p.CenterIndex,
-			p.Focused == PaneCenter,
-			centerW,
-			bodyH,
-		)
-		rightView := RenderMergedRight(p.ArtANSI, curTrack, p.Queue, p.QueueIndex, p.Focused == PaneRight, rightW, bodyH)
-
-		bodyContent = lipgloss.JoinHorizontal(lipgloss.Top, navView, centerView, rightView)
-
-	} else if p.ShowLeftSidebar && !p.ShowRightSidebar {
-		navW := innerW * 30 / 100
+	} else if p.ShowLeftSidebar {
+		navW = innerW * 30 / 100
 		if navW < 30 {
 			navW = 30
 		}
 		if navW > 45 {
 			navW = 45
 		}
-		centerW := innerW - navW
-
-		navView := RenderNav(p.Playlists, p.PinnedURIs, p.PlaylistFilter, p.NavIndex, p.Focused == PaneNav, navW, bodyH)
-		centerView := RenderCenter(
-			p.CurrentTab,
-			p.PlaylistTracks,
-			p.ArtistAlbums,
-			p.History,
-			p.PlaylistName,
-			curURI,
-			p.LyricsLines,
-			p.LyricsCursor,
-			curProgress,
-			p.SearchQuery,
-			p.SearchFocused,
-			p.CenterIndex,
-			p.Focused == PaneCenter,
-			centerW,
-			bodyH,
-		)
-
-		bodyContent = lipgloss.JoinHorizontal(lipgloss.Top, navView, centerView)
-
-	} else if !p.ShowLeftSidebar && p.ShowRightSidebar {
-		rightW := innerW * 36 / 100
+	} else if p.ShowRightSidebar {
+		rightW = innerW * 36 / 100
 		if rightW < 34 {
 			rightW = 34
 		}
-		centerW := innerW - rightW
-
-		centerView := RenderCenter(
-			p.CurrentTab,
-			p.PlaylistTracks,
-			p.ArtistAlbums,
-			p.History,
-			p.PlaylistName,
-			curURI,
-			p.LyricsLines,
-			p.LyricsCursor,
-			curProgress,
-			p.SearchQuery,
-			p.SearchFocused,
-			p.CenterIndex,
-			p.Focused == PaneCenter,
-			centerW,
-			bodyH,
-		)
-		rightView := RenderMergedRight(p.ArtANSI, curTrack, p.Queue, p.QueueIndex, p.Focused == PaneRight, rightW, bodyH)
-
-		bodyContent = lipgloss.JoinHorizontal(lipgloss.Top, centerView, rightView)
-
-	} else {
-		bodyContent = RenderCenter(
-			p.CurrentTab,
-			p.PlaylistTracks,
-			p.ArtistAlbums,
-			p.History,
-			p.PlaylistName,
-			curURI,
-			p.LyricsLines,
-			p.LyricsCursor,
-			curProgress,
-			p.SearchQuery,
-			p.SearchFocused,
-			p.CenterIndex,
-			p.Focused == PaneCenter,
-			innerW,
-			bodyH,
-		)
 	}
+
+	centerW := innerW - navW - rightW
+	if centerW < 20 {
+		centerW = 20
+	}
+
+	centerView := RenderCenter(
+		p.CurrentTab,
+		p.PlaylistTracks,
+		p.ArtistAlbums,
+		p.SearchArtists,
+		p.History,
+		p.PlaylistName,
+		curURI,
+		p.LyricsLines,
+		p.LyricsCursor,
+		curProgress,
+		p.SearchQuery,
+		p.SearchFocused,
+		p.CenterIndex,
+		p.Focused == PaneCenter,
+		centerW,
+		bodyH,
+	)
+
+	var views []string
+	if navW > 0 {
+		views = append(views, RenderNav(p.Playlists, p.PinnedURIs, p.PlaylistFilter, p.NavIndex, p.Focused == PaneNav, navW, bodyH))
+	}
+	views = append(views, centerView)
+	if rightW > 0 {
+		views = append(views, RenderMergedRight(p.ArtANSI, curTrack, p.Queue, p.QueueIndex, p.Focused == PaneRight, rightW, bodyH))
+	}
+	bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, views...)
 
 	playerView := RenderPlayer(p.Playback, p.Focused == PanePlayer, innerW)
 	innerCombined := lipgloss.JoinVertical(lipgloss.Left, bodyContent, playerView)
@@ -352,7 +296,7 @@ func RenderFullUI(p ViewParams) string {
 }
 
 func renderHelpOverlay(p ViewParams) string {
-	modal := RenderKeybindsModal(p.Width, p.Height)
+	modal := RenderKeybindsModal(p.KeybindItems, p.HelpIndex, p.HelpEditing, p.Width, p.Height)
 
 	placed := lipgloss.Place(p.Width, p.Height, lipgloss.Center, lipgloss.Center, modal)
 
@@ -534,12 +478,14 @@ func renderZenMode(p ViewParams) string {
 
 	curProgress := 0
 	durationMs := 0
+	volume := 50
 	playing := false
 	trackName := "No Track Playing"
 	artistName := "spotumn"
 	if p.Playback != nil {
 		curProgress = p.Playback.ProgressMs
 		durationMs = p.Playback.DurationMs
+		volume = p.Playback.Volume
 		playing = p.Playback.Playing
 		if p.Playback.CurrentTrack != nil {
 			trackName = p.Playback.CurrentTrack.Name
@@ -556,6 +502,10 @@ func renderZenMode(p ViewParams) string {
 	if playing {
 		playIcon = "❚❚"
 	}
+
+	volBar := RenderMiniSlider(volume, 8)
+	volText := fmt.Sprintf("Vol: [%s] %2d%%", volBar, volume)
+	vStyled := StyleFaint.Render(volText)
 
 	artANSI := p.ZenArtANSI
 	if artANSI == "" {
@@ -605,7 +555,7 @@ func renderZenMode(p ViewParams) string {
 		}
 
 		// Y-axis vertical centering for artwork and controls stack
-		artStackH := len(displayedArtRows) + 6
+		artStackH := len(displayedArtRows) + 7
 		topPad := (innerH - artStackH) / 2
 		if topPad < 0 {
 			topPad = 0
@@ -642,6 +592,7 @@ func renderZenMode(p ViewParams) string {
 		}
 		seek := renderProgressBar(ratio, barLen)
 		leftLines = append(leftLines, PadToWidth(lipgloss.PlaceHorizontal(leftW, lipgloss.Center, seek), leftW))
+		leftLines = append(leftLines, PadToWidth(lipgloss.PlaceHorizontal(leftW, lipgloss.Center, vStyled), leftW))
 
 		for len(leftLines) < innerH {
 			leftLines = append(leftLines, PadToWidth("", leftW))
@@ -683,7 +634,7 @@ func renderZenMode(p ViewParams) string {
 		}
 
 		// Y-axis vertical centering for centered artwork and controls
-		artStackH := len(displayedArtRows) + 6
+		artStackH := len(displayedArtRows) + 7
 		topPad := (innerH - artStackH) / 2
 		if topPad < 0 {
 			topPad = 0
@@ -716,6 +667,7 @@ func renderZenMode(p ViewParams) string {
 		}
 		seek := renderProgressBar(ratio, barLen)
 		innerLines = append(innerLines, PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, seek), innerW))
+		innerLines = append(innerLines, PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, vStyled), innerW))
 
 		for len(innerLines) < innerH {
 			innerLines = append(innerLines, PadToWidth("", innerW))
@@ -729,7 +681,7 @@ func renderZenMode(p ViewParams) string {
 		banner := StyleBold.Render(TruncateString(trackName, innerW/2)) + StyleFaint.Render(" ─ ") + StyleLavender.Render(TruncateString(artistName, innerW/2))
 		topRow := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, banner), innerW)
 
-		// Bottom controls and seekbar (UNDER the lyrics, never on top of lyrics)
+		// Bottom controls, seekbar, and volume (UNDER the lyrics, never on top of lyrics)
 		ctrls := fmt.Sprintf("%s   [ ⏮  %s  ⏭ ]   %s", elapsed, playIcon, total)
 		barLen := 40
 		if barLen > innerW-10 {
@@ -738,8 +690,9 @@ func renderZenMode(p ViewParams) string {
 		seek := renderProgressBar(ratio, barLen)
 		rowControls := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, StylePurple.Render(ctrls)), innerW)
 		rowSeek := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, seek), innerW)
+		rowVol := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, vStyled), innerW)
 
-		bottomH := 3 // 1 gap + controls + seek
+		bottomH := 4 // 1 gap + controls + seek + vol
 		topH := 2    // 1 pad + banner
 
 		lyricsH := innerH - topH - bottomH
@@ -756,6 +709,7 @@ func renderZenMode(p ViewParams) string {
 		innerLines = append(innerLines, PadToWidth("", innerW))
 		innerLines = append(innerLines, rowControls)
 		innerLines = append(innerLines, rowSeek)
+		innerLines = append(innerLines, rowVol)
 
 		for len(innerLines) < innerH {
 			innerLines = append(innerLines, PadToWidth("", innerW))

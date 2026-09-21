@@ -28,16 +28,16 @@ func TestConfigDirAndTemplate(t *testing.T) {
 }
 
 func TestEnvOverride(t *testing.T) {
-	testID := "test_client_id_12345"
-	os.Setenv("SPOTUMN_CLIENT_ID", testID)
-	defer os.Unsetenv("SPOTUMN_CLIENT_ID")
+	testRenderer := "ansi"
+	os.Setenv("SPOTUMN_ART_RENDERER", testRenderer)
+	defer os.Unsetenv("SPOTUMN_ART_RENDERER")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("unexpected error loading with env: %v", err)
 	}
-	if cfg.ClientID != testID {
-		t.Fatalf("expected client ID %s, got %s", testID, cfg.ClientID)
+	if cfg.ArtRenderer != testRenderer {
+		t.Fatalf("expected art renderer %s, got %s", testRenderer, cfg.ArtRenderer)
 	}
 }
 
@@ -46,7 +46,7 @@ func TestFilePermissions(t *testing.T) {
 	testPath := filepath.Join(tmpDir, "config.yml")
 
 	// Template write
-	template := "client_id: \"test\"\nport: 8080\n"
+	template := "port: 8080\n"
 	err := os.WriteFile(testPath, []byte(template), 0600)
 	if err != nil {
 		t.Fatalf("failed to write test file: %v", err)

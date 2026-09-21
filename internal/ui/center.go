@@ -15,6 +15,7 @@ func RenderCenterLines(
 	currentTab CenterTab,
 	tracks []backend.Track,
 	albums []backend.Playlist,
+	artists []backend.Playlist,
 	history []backend.Track,
 	playlistName string,
 	currentPlayingTrackURI string,
@@ -40,7 +41,7 @@ func RenderCenterLines(
 	searchBarLines := renderProminentSearchBar(searchQuery, searchFocused, width)
 	lines = append(lines, searchBarLines...)
 
-	// 2. Tab Bar: 1 Tracks | 2 History | 3 Lyrics directly below search
+	// 2. Tab Bar: 1 Tracks | 2 Lyrics | 3 History directly below search
 	tabBar := renderTabBar(currentTab, width)
 	lines = append(lines, tabBar)
 	lines = append(lines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
@@ -54,7 +55,7 @@ func RenderCenterLines(
 	var bodyLines []string
 	switch currentTab {
 	case TabTracks:
-		bodyLines = renderTracks(tracks, albums, playlistName, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
+		bodyLines = renderTracks(tracks, albums, artists, playlistName, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
 	case TabHistory:
 		bodyLines = renderHistory(history, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
 	case TabLyrics:
@@ -78,6 +79,7 @@ func RenderCenter(
 	currentTab CenterTab,
 	tracks []backend.Track,
 	albums []backend.Playlist,
+	artists []backend.Playlist,
 	history []backend.Track,
 	playlistName string,
 	currentPlayingTrackURI string,
@@ -103,6 +105,7 @@ func RenderCenter(
 		currentTab,
 		tracks,
 		albums,
+		artists,
 		history,
 		playlistName,
 		currentPlayingTrackURI,
@@ -133,8 +136,8 @@ func renderTabBar(currentTab CenterTab, width int) string {
 		label string
 	}{
 		{TabTracks, "1 Tracks"},
-		{TabHistory, "2 History"},
-		{TabLyrics, "3 Lyrics"},
+		{TabLyrics, "2 Lyrics"},
+		{TabHistory, "3 History"},
 	}
 
 	var sb strings.Builder
@@ -269,25 +272,118 @@ func renderAlbumRow(idx int, a backend.Playlist, isSelected bool, focused bool, 
 	return rowContent
 }
 
-// renderTracks renders a clean tracks table with scrolling, colored block row highlighting, and albums section for artist pages
+// FormatTotalDuration formats total milliseconds and track count into a clean summary
+func FormatTotalDuration(totalMs int, trackCount int) string {
+	if trackCount == 0 {
+		return ""
+	}
+	countLabel := fmt.Sprintf("%d tracks", trackCount)
+	if trackCount == 1 {
+		countLabel = "1 track"
+	}
+	if totalMs <= 0 {
+		return countLabel
+	}
+
+	totalSeconds := totalMs / 1000
+	hours := totalSeconds / 3600
+	mins := (totalSeconds % 3600) / 60
+	secs := totalSeconds % 60
+
+	if hours > 0 {
+		if mins > 0 {
+			return fmt.Sprintf("%s • %d hr %d min", countLabel, hours, mins)
+		}
+		return fmt.Sprintf("%s • %d hr", countLabel, hours)
+	}
+	if mins > 0 {
+		return fmt.Sprintf("%s • %d min %d sec", countLabel, mins, secs)
+	}
+	return fmt.Sprintf("%s • %d sec", countLabel, secs)
+}
+
+func renderPlaylistHeader(title string, totalMs int, trackCount int, width int) string {
+	infoStr := FormatTotalDuration(totalMs, trackCount)
+	infoW := ansi.StringWidth(infoStr)
+
+	leftMargin := "  ♫ "
+	rightMargin := "  "
+
+	availForTitle := width - infoW - ansi.StringWidth(leftMargin) - ansi.StringWidth(rightMargin) - 2
+	if availForTitle < 10 {
+		availForTitle = 10
+	}
+
+	titleTrunc := TruncateString(title, availForTitle)
+	leftStyled := StylePurple.Render(leftMargin + titleTrunc)
+	rightStyled := StyleFaint.Render(infoStr + rightMargin)
+
+	usedW := ansi.StringWidth(leftMargin+titleTrunc) + infoW + ansi.StringWidth(rightMargin)
+	gap := width - usedW
+	if gap < 0 {
+		gap = 0
+	}
+
+	return leftStyled + strings.Repeat(" ", gap) + rightStyled
+}
+
+// renderArtistRow renders a single artist row in search results
+func renderArtistRow(idx int, a backend.Playlist, isSelected bool, focused bool, nameW, typeW, popW int, width int) string {
+	iconCol := " 󰠃 "
+	nameCol := TruncateString(a.Name, nameW-1)
+	nameCol += strings.Repeat(" ", nameW-ansi.StringWidth(nameCol))
+
+	typeCol := TruncateString(a.OwnerID, typeW-1)
+	typeCol += strings.Repeat(" ", typeW-ansi.StringWidth(typeCol))
+
+	popStr := fmt.Sprintf("%d%% pop", a.TrackCount)
+	if a.TrackCount <= 0 {
+		popStr = ""
+	}
+	popCol := TruncateString(popStr, popW)
+	popCol += strings.Repeat(" ", popW-ansi.StringWidth(popCol))
+
+	rawRow := iconCol + nameCol + typeCol + popCol
+
+	if isSelected && focused {
+		return RenderPaddedLine(rawRow, StyleActiveFocusedBlock, width)
+	} else if isSelected {
+		return RenderPaddedLine(rawRow, StyleActiveUnfocusedBlock, width)
+	}
+
+	iconStyled := StylePeach.Render(iconCol)
+	nameStyled := StyleBold.Render(nameCol)
+	typeStyled := StyleLavender.Render(typeCol)
+	popStyled := StyleFaint.Render(popCol)
+
+	rowContent := iconStyled + nameStyled + typeStyled + popStyled
+	remPad := width - ansi.StringWidth(rowContent)
+	if remPad > 0 {
+		rowContent += strings.Repeat(" ", remPad)
+	}
+	return rowContent
+}
+
+// renderTracks renders a clean tracks table with scrolling, colored block row highlighting, and albums/artists sections
 func renderTracks(
 	tracks []backend.Track,
 	albums []backend.Playlist,
+	artists []backend.Playlist,
 	playlistName string,
 	currentPlayingURI string,
 	selectedIndex int,
 	focused bool,
 	width, height int,
 ) []string {
-	if len(tracks) == 0 && len(albums) == 0 {
+	if len(tracks) == 0 && len(albums) == 0 && len(artists) == 0 {
 		var lines []string
 		title := "Tracks"
 		if playlistName != "" {
-			title = "♫ " + playlistName
+			title = playlistName
 		}
-		titleHeader := StylePurple.Render("  " + title)
+		titleHeader := StylePurple.Render("  ♫ " + title)
 		lines = append(lines, PadToWidth(titleHeader, width))
-		emptyMsg := StyleFaint.Render("No tracks or albums found. Select a playlist or press [/] to search.")
+		emptyMsg := StyleFaint.Render("No tracks, albums, or artists found. Select a playlist or press [/] to search.")
 		lines = append(lines, PadToWidth("", width))
 		lines = append(lines, PadToWidth("  "+emptyMsg, width))
 		return lines
@@ -305,15 +401,27 @@ func renderTracks(
 	var allVisualLines []string
 	selectedLineIdx := 0
 
-	if len(albums) > 0 {
-		// Artist Page: Top Tracks + Albums Discography
-		title := "♫ " + playlistName
-		titleHeader := StylePurple.Render("  " + title)
-		allVisualLines = append(allVisualLines, PadToWidth(titleHeader, width))
+	totalMs := 0
+	for _, t := range tracks {
+		totalMs += t.DurationMs
+	}
 
+	title := "Tracks"
+	if playlistName != "" {
+		title = playlistName
+	}
+	headerLine := renderPlaylistHeader(title, totalMs, len(tracks), width)
+	allVisualLines = append(allVisualLines, headerLine)
+
+	if len(albums) > 0 || len(artists) > 0 {
+		// Multi-section View: Songs + Albums + Artists
 		if len(tracks) > 0 {
 			allVisualLines = append(allVisualLines, PadToWidth("", width))
-			allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render("  ♪ Top Tracks"), width))
+			subHeader := "  ♪ Top Tracks"
+			if strings.HasPrefix(playlistName, "Search:") {
+				subHeader = "  ♪ Songs"
+			}
+			allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render(subHeader), width))
 			headerNum := PadToWidth(" #", numW)
 			headerTitle := PadToWidth("Title", titleW)
 			headerArtist := PadToWidth("Artist", artistW)
@@ -334,39 +442,66 @@ func renderTracks(
 		}
 
 		// Albums Section
-		iconW := 4
-		countW := 12
-		remAlbW := width - iconW - countW - 4
-		if remAlbW < 20 {
-			remAlbW = 20
-		}
-		albTitleW := remAlbW * 55 / 100
-		albDescW := remAlbW - albTitleW
-
-		allVisualLines = append(allVisualLines, PadToWidth("", width))
-		allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render("  ── 💿 Albums & Discography ──────────────────────────────────────────"), width))
-		albHeader := StyleFaint.Render("    " + PadToWidth("Album", albTitleW) + PadToWidth("Type • Year", albDescW) + PadToWidth("Tracks", countW))
-		allVisualLines = append(allVisualLines, PadToWidth(albHeader, width))
-		allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
-
-		for aIdx, a := range albums {
-			itemIdx := len(tracks) + aIdx
-			if itemIdx == selectedIndex {
-				selectedLineIdx = len(allVisualLines)
+		if len(albums) > 0 {
+			iconW := 4
+			countW := 12
+			remAlbW := width - iconW - countW - 4
+			if remAlbW < 20 {
+				remAlbW = 20
 			}
-			isSelected := itemIdx == selectedIndex
-			lineContent := renderAlbumRow(aIdx, a, isSelected, focused, albTitleW, albDescW, countW, width)
-			allVisualLines = append(allVisualLines, lineContent)
+			albTitleW := remAlbW * 55 / 100
+			albDescW := remAlbW - albTitleW
+
+			allVisualLines = append(allVisualLines, PadToWidth("", width))
+			albSubHeader := "  💿 Albums & Discography"
+			if strings.HasPrefix(playlistName, "Search:") {
+				albSubHeader = "  💿 Albums"
+			}
+			allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render(albSubHeader), width))
+			albHeader := StyleFaint.Render("    " + PadToWidth("Album", albTitleW) + PadToWidth("Type • Year", albDescW) + PadToWidth("Tracks", countW))
+			allVisualLines = append(allVisualLines, PadToWidth(albHeader, width))
+			allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
+
+			for aIdx, a := range albums {
+				itemIdx := len(tracks) + aIdx
+				if itemIdx == selectedIndex {
+					selectedLineIdx = len(allVisualLines)
+				}
+				isSelected := itemIdx == selectedIndex
+				lineContent := renderAlbumRow(aIdx, a, isSelected, focused, albTitleW, albDescW, countW, width)
+				allVisualLines = append(allVisualLines, lineContent)
+			}
+		}
+
+		// Artists Section
+		if len(artists) > 0 {
+			iconW := 4
+			popW := 12
+			remArtW := width - iconW - popW - 4
+			if remArtW < 20 {
+				remArtW = 20
+			}
+			artNameW := remArtW * 60 / 100
+			artTypeW := remArtW - artNameW
+
+			allVisualLines = append(allVisualLines, PadToWidth("", width))
+			allVisualLines = append(allVisualLines, PadToWidth(StylePeach.Render("  󰠃 Artists"), width))
+			artHeader := StyleFaint.Render("    " + PadToWidth("Artist", artNameW) + PadToWidth("Type", artTypeW) + PadToWidth("Popularity", popW))
+			allVisualLines = append(allVisualLines, PadToWidth(artHeader, width))
+			allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width))
+
+			for artIdx, art := range artists {
+				itemIdx := len(tracks) + len(albums) + artIdx
+				if itemIdx == selectedIndex {
+					selectedLineIdx = len(allVisualLines)
+				}
+				isSelected := itemIdx == selectedIndex
+				lineContent := renderArtistRow(artIdx, art, isSelected, focused, artNameW, artTypeW, popW, width)
+				allVisualLines = append(allVisualLines, lineContent)
+			}
 		}
 	} else {
 		// Standard Playlist or Single Album View
-		title := "Tracks"
-		if playlistName != "" {
-			title = "♫ " + playlistName
-		}
-		titleHeader := StylePurple.Render("  " + title)
-		allVisualLines = append(allVisualLines, PadToWidth(titleHeader, width))
-
 		headerNum := PadToWidth(" #", numW)
 		headerTitle := PadToWidth("Title", titleW)
 		headerArtist := PadToWidth("Artist", artistW)
@@ -396,13 +531,44 @@ func renderTracks(
 		scrollOffset = selectedLineIdx - availRows + 1
 	}
 
+	totalLines := len(allVisualLines)
+	thumbH := 1
+	thumbStart := 0
+	if totalLines > availRows && availRows > 0 {
+		thumbH = (availRows * availRows) / totalLines
+		if thumbH < 1 {
+			thumbH = 1
+		}
+		maxScroll := totalLines - availRows
+		if maxScroll > 0 {
+			thumbStart = (scrollOffset * (availRows - thumbH)) / maxScroll
+		}
+		if thumbStart+thumbH > availRows {
+			thumbStart = availRows - thumbH
+		}
+		if thumbStart < 0 {
+			thumbStart = 0
+		}
+	}
+
 	var lines []string
 	for i := 0; i < availRows; i++ {
 		lineIdx := scrollOffset + i
+		var rawLine string
 		if lineIdx < len(allVisualLines) {
-			lines = append(lines, allVisualLines[lineIdx])
+			rawLine = allVisualLines[lineIdx]
+		}
+		if totalLines > availRows {
+			var scrollIndicator string
+			if i >= thumbStart && i < thumbStart+thumbH {
+				scrollIndicator = StylePurple.Render("█")
+			} else {
+				scrollIndicator = StyleFaint.Render("│")
+			}
+			trimmed := PadToWidth(rawLine, width-2)
+			lines = append(lines, trimmed+" "+scrollIndicator)
 		} else {
-			lines = append(lines, PadToWidth("", width))
+			lines = append(lines, PadToWidth(rawLine, width))
 		}
 	}
 

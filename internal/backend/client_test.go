@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"spotumn/internal/config"
+	"github.com/zmb3/spotify/v2"
 )
 
 func TestSaveAndLoadLastState(t *testing.T) {
@@ -67,3 +68,73 @@ func TestSaveAndLoadLastState(t *testing.T) {
 		t.Errorf("expected ContextURI 'spotify:playlist:test_playlist', got %s", loaded.ContextURI)
 	}
 }
+
+func TestQueueAllowsConsecutiveDuplicates(t *testing.T) {
+	// Verify that multiple identical tracks in queue are preserved without deduplication
+	items := []Track{
+		{ID: "track1", URI: "spotify:track:track1", Name: "Song A"},
+		{ID: "track1", URI: "spotify:track:track1", Name: "Song A"}, // duplicate
+		{ID: "track2", URI: "spotify:track:track2", Name: "Song B"},
+		{ID: "track2", URI: "spotify:track:track2", Name: "Song B"}, // duplicate
+	}
+
+	res := &QueueData{
+		Current: &items[0],
+	}
+	for _, item := range items {
+		res.Items = append(res.Items, item)
+	}
+
+	if len(res.Items) != 4 {
+		t.Errorf("expected 4 queue items preserved with duplicates, got %d", len(res.Items))
+	}
+}
+
+func TestSpotumnDeviceSorting(t *testing.T) {
+	devices := []spotify.PlayerDevice{
+		{ID: "dev1", Name: "Phone", Type: "Smartphone"},
+		{ID: "dev2", Name: "Living Room", Type: "Speaker"},
+		{ID: "dev3", Name: "spotumn", Type: "Computer"},
+		{ID: "dev4", Name: "Echo Dot", Type: "Speaker"},
+	}
+
+	sorted := sortDevicesWithSpotumnFirst(devices)
+	if len(sorted) != 4 {
+		t.Fatalf("expected 4 devices, got %d", len(sorted))
+	}
+	if sorted[0].Name != "spotumn" || sorted[0].ID != "dev3" {
+		t.Errorf("expected spotumn to be topmost device (index 0), got %s (%s)", sorted[0].Name, sorted[0].ID)
+	}
+	if sorted[1].Name != "Phone" || sorted[2].Name != "Living Room" || sorted[3].Name != "Echo Dot" {
+		t.Errorf("expected original relative order for remaining devices, got: %+v", sorted)
+	}
+}
+
+func TestLoadLastStateDefaultsToSpotumnDevice(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	c := &Client{}
+	state := &PlaybackState{
+		Playing:    false,
+		DeviceName: "iPhone 15 Pro",
+		DeviceID:   "remote_device_id",
+		CurrentTrack: &Track{
+			Name:   "Song",
+			Artist: "Artist",
+		},
+	}
+	c.SaveLastState(state)
+
+	loaded := c.LoadLastState()
+	if loaded == nil {
+		t.Fatal("expected non-nil loaded state")
+	}
+	if loaded.DeviceName != "spotumn" {
+		t.Errorf("expected loaded state to default DeviceName to 'spotumn', got '%s'", loaded.DeviceName)
+	}
+	if loaded.DeviceID != "" {
+		t.Errorf("expected loaded state to clear remote DeviceID, got '%s'", loaded.DeviceID)
+	}
+}
+

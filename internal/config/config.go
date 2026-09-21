@@ -8,11 +8,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// SpotifyClientID is the fixed built-in Spotify Connect client ID
+const SpotifyClientID = "d420a117a32841c2b3474932e49fb54b"
+
 type Config struct {
-	ClientID    string `yaml:"client_id"`
 	Port        int    `yaml:"port"`
 	RedirectURI string `yaml:"redirect_uri"`
-	ArtRenderer string `yaml:"art_renderer"` // "auto" (default: image if terminal supports it, else ansi), "image", "ansi"
+	ArtRenderer string `yaml:"art_renderer"` // "auto", "image", "ansi"
 }
 
 func GetDir() string {
@@ -26,13 +28,11 @@ func GetDir() string {
 }
 
 const (
-	DefaultClientID = "d420a117a32841c2b3474932e49fb54b"
-	DefaultPort     = 8989
+	DefaultPort = 8989
 )
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		ClientID:    DefaultClientID,
 		Port:        DefaultPort,
 		ArtRenderer: "auto",
 	}
@@ -40,16 +40,13 @@ func Load() (*Config, error) {
 	configPath := filepath.Join(GetDir(), "config.yml")
 	data, err := os.ReadFile(configPath)
 	if err != nil && os.IsNotExist(err) {
-		template := "# spotumn configuration (Optional - works out of the box)\nclient_id: \"[your_client_id]\"\nport: 8989\n# art_renderer: auto # auto, image, ansi\n"
+		template := "# spotumn configuration\nport: 8989\n# art_renderer: auto # auto, ansi\n"
 		_ = os.WriteFile(configPath, []byte(template), 0600)
 	} else if err == nil {
 		_ = yaml.Unmarshal(data, cfg)
 	}
 
 	// Environment variables take precedence over config file
-	if envID := strings.TrimSpace(os.Getenv("SPOTUMN_CLIENT_ID")); envID != "" {
-		cfg.ClientID = envID
-	}
 	if envURI := strings.TrimSpace(os.Getenv("SPOTUMN_REDIRECT_URI")); envURI != "" {
 		cfg.RedirectURI = envURI
 	}
@@ -57,10 +54,6 @@ func Load() (*Config, error) {
 		cfg.ArtRenderer = strings.ToLower(envArt)
 	}
 
-	cfg.ClientID = strings.TrimSpace(cfg.ClientID)
-	if cfg.ClientID == "" || cfg.ClientID == "[your_client_id]" {
-		cfg.ClientID = DefaultClientID
-	}
 	cfg.RedirectURI = strings.TrimSpace(cfg.RedirectURI)
 	if cfg.Port <= 0 {
 		cfg.Port = DefaultPort

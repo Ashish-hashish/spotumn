@@ -1,10 +1,13 @@
 package backend
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -56,13 +59,57 @@ func (d *Daemon) Start() error {
 	cacheDir := filepath.Join(config.GetDir(), "cache")
 	_ = os.MkdirAll(cacheDir, 0700)
 
-	// Auto-copy existing librespot credentials if available
 	credDest := filepath.Join(cacheDir, "credentials.json")
-	if _, err := os.Stat(credDest); os.IsNotExist(err) {
-		home, _ := os.UserHomeDir()
-		altSource := filepath.Join(home, ".cache", "spotify-player", "credentials.json")
-		if data, err := os.ReadFile(altSource); err == nil {
-			_ = os.WriteFile(credDest, data, 0600)
+	hasCreds := false
+	if _, err := os.Stat(credDest); err == nil {
+		hasCreds = true
+	}
+
+	// If no credentials found, perform automated 1-time OAuth sign-in for librespot
+	if !hasCreds {
+		cmdOAuth := exec.Command(bin,
+			"--name", "spotumn",
+			"--device-type", "computer",
+			"--cache", cacheDir,
+			"--enable-oauth",
+		)
+		stdout, err := cmdOAuth.StdoutPipe()
+		if err == nil {
+			cmdOAuth.Stderr = cmdOAuth.Stdout
+			if err := cmdOAuth.Start(); err == nil {
+				d.cmd = cmdOAuth
+				d.running = true
+
+				// Scan output for "Browse to: (https://...)" and auto-open browser
+				go func() {
+					scanner := bufio.NewScanner(stdout)
+					for scanner.Scan() {
+						line := scanner.Text()
+						if strings.Contains(line, "Browse to: https://") {
+							idx := strings.Index(line, "https://")
+							if idx != -1 {
+								url := strings.Fields(line[idx:])[0]
+								openURL(url)
+							}
+						}
+					}
+					_ = cmdOAuth.Wait()
+					d.mu.Lock()
+					d.running = false
+					d.mu.Unlock()
+				}()
+
+				// Wait up to 5 seconds for credentials to be created
+				for i := 0; i < 25; i++ {
+					time.Sleep(200 * time.Millisecond)
+					if _, err := os.Stat(credDest); err == nil {
+						hasCreds = true
+						break
+					}
+				}
+
+				return nil
+			}
 		}
 	}
 
@@ -92,6 +139,21 @@ func (d *Daemon) Start() error {
 	}()
 
 	return nil
+}
+
+func openURL(targetURL string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.Command("xdg-open", targetURL)
+	case "darwin":
+		cmd = exec.Command("open", targetURL)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", targetURL)
+	}
+	if cmd != nil {
+		_ = cmd.Start()
+	}
 }
 
 // Stop cleanly terminates librespot

@@ -13,18 +13,18 @@ type CenterTab int
 
 const (
 	TabTracks CenterTab = iota
-	TabHistory
 	TabLyrics
+	TabHistory
 )
 
 func (t CenterTab) Title() string {
 	switch t {
 	case TabTracks:
 		return "Tracks"
-	case TabHistory:
-		return "History"
 	case TabLyrics:
 		return "Lyrics"
+	case TabHistory:
+		return "History"
 	default:
 		return ""
 	}

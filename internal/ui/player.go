@@ -23,7 +23,6 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 	repeat := "off"
 	trackName := "No playback active"
 	artistName := ""
-	deviceName := ""
 
 	if state != nil {
 		isPlaying = state.Playing
@@ -32,9 +31,6 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 		volume = state.Volume
 		shuffle = state.Shuffle
 		repeat = state.Repeat
-		if state.DeviceName != "" && !strings.EqualFold(state.DeviceName, "spotumn") {
-			deviceName = state.DeviceName
-		}
 		if state.CurrentTrack != nil {
 			trackName = state.CurrentTrack.Name
 			artistName = state.CurrentTrack.Artist
@@ -57,23 +53,29 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 	if isPlaying {
 		playIcon = StyleMint.Render("❚❚")
 	}
-	shuffIcon := "off"
+
+	var shuffIcon string
 	if shuffle {
-		shuffIcon = "on"
+		shuffIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("󰒝")
+	} else {
+		shuffIcon = StyleFaint.Render("󰒞")
 	}
-	repIcon := "off"
-	if repeat != "off" && repeat != "" {
-		repIcon = repeat
+
+	var repIcon string
+	switch repeat {
+	case "track":
+		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("󰑘")
+	case "context":
+		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("󰑖")
+	default:
+		repIcon = StyleFaint.Render("󰑗")
 	}
-	ctrls := fmt.Sprintf("⏮   %s   ⏭    [S:%s] [R:%s]", playIcon, shuffIcon, repIcon)
+
+	ctrls := fmt.Sprintf("%s   ⏮   %s   ⏭   %s", shuffIcon, playIcon, repIcon)
 	ctrlsStyled := StylePurple.Render(ctrls)
 
-	volBar := renderMiniSlider(volume, 8)
-	rightInfo := ""
-	if deviceName != "" {
-		rightInfo = fmt.Sprintf("[%s] ", TruncateString(deviceName, 12))
-	}
-	rightInfo += fmt.Sprintf("Vol: [%s] %2d%% ", volBar, volume)
+	volBar := RenderMiniSlider(volume, 8)
+	rightInfo := fmt.Sprintf("Vol: [%s] %2d%% ", volBar, volume)
 	rightStyled := StyleFaint.Render(rightInfo)
 
 	lines = append(lines, alignRow(leftStyled, ctrlsStyled, rightStyled, width))
@@ -112,34 +114,55 @@ func RenderPlayer(state *backend.PlaybackState, focused bool, width int) string 
 
 	lines := RenderPlayerLines(state, focused, contentW)
 
-	boxStyle := lipgloss.NewStyle().Width(width).Height(4)
+	devName := "spotumn"
+	if state != nil && state.DeviceName != "" {
+		devName = state.DeviceName
+	}
+	devTag := " " + StyleLavender.Render("󰓃 "+TruncateString(devName, 18)) + " ─"
+	rawDevTag := " 󰓃 " + TruncateString(devName, 18) + " ─"
+	devTagW := ansi.StringWidth(rawDevTag)
+
+	cornerTL := "╭"
+	cornerTR := "╮"
+	cornerBL := "╰"
+	cornerBR := "╯"
+	borderStyle := lipgloss.NewStyle().Foreground(CurrentTheme.Overlay)
 	if focused {
-		boxStyle = boxStyle.Border(lipgloss.ThickBorder()).BorderForeground(CurrentTheme.Purple).Bold(true)
-	} else {
-		boxStyle = boxStyle.Border(lipgloss.RoundedBorder()).BorderForeground(CurrentTheme.Overlay)
+		borderStyle = lipgloss.NewStyle().Foreground(CurrentTheme.Purple).Bold(true)
 	}
 
-	return boxStyle.Render(strings.Join(lines, "\n"))
+	dashesLen := contentW - devTagW
+	if dashesLen < 1 {
+		dashesLen = 1
+	}
+
+	topBorder := borderStyle.Render(cornerTL+strings.Repeat("─", dashesLen)) + devTag + borderStyle.Render(cornerTR)
+	bottomBorder := borderStyle.Render(cornerBL+strings.Repeat("─", contentW)+cornerBR)
+	sideBar := borderStyle.Render("│")
+
+	var output []string
+	output = append(output, PadToWidth(topBorder, width))
+	for _, l := range lines {
+		row := sideBar + PadToWidth(l, contentW) + sideBar
+		output = append(output, PadToWidth(row, width))
+	}
+	output = append(output, PadToWidth(bottomBorder, width))
+
+	return strings.Join(output, "\n")
 }
 
-func renderMiniSlider(value, width int) string {
+// RenderMiniSlider renders a mini horizontal slider with thumb dot
+func RenderMiniSlider(value, width int) string {
 	if width <= 0 {
 		return ""
 	}
 	ratio := float64(value) / 100.0
 	if ratio < 0 {
 		ratio = 0
-	}
-	if ratio > 1 {
+	} else if ratio > 1 {
 		ratio = 1
 	}
-	filledChars := int(ratio * float64(width))
-	emptyChars := width - filledChars
-
-	filled := lipgloss.NewStyle().Foreground(CurrentTheme.Purple).Bold(true).Render(strings.Repeat("━", filledChars))
-	empty := StyleFaint.Render(strings.Repeat("─", emptyChars))
-
-	return filled + empty
+	return renderProgressBar(ratio, width)
 }
 
 func renderProgressBar(ratio float64, width int) string {
