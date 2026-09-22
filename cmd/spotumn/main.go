@@ -75,6 +75,4 @@ func main() {
 		fmt.Fprintf(os.Stderr, "spotumn error: %v\n", err)
 		os.Exit(1)
 	}
-
-	daemon.Stop()
 }

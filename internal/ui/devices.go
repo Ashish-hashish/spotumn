@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
+	"spotumn/internal/backend"
+
 	"github.com/zmb3/spotify/v2"
 )
 
 // RenderDevicesModal renders an interactive Spotify Connect devices selection window
 func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScanning bool, width, height int) string {
+	devices = backend.SortDevicesWithSpotumnFirst(devices)
 	modalW := 56
 	if modalW > width-4 {
 		modalW = width - 4
@@ -21,32 +23,20 @@ func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScann
 	var sb strings.Builder
 	title := StylePurple.Render("  Connected Devices")
 	if isScanning {
-		title += " " + StyleMint.Render("● Scanning...")
+		title += BgPad(1) + StyleMint.Render("● Scanning...")
 	}
 	sb.WriteString(PadToWidth(title, modalW-2) + "\n")
-	sb.WriteString(PadToWidth(StyleFaint.Render(strings.Repeat("─", modalW-2)), modalW-2) + "\n\n")
+	sb.WriteString(PadToWidth(StyleFaint.Render(strings.Repeat("─", modalW-2)), modalW-2) + "\n")
+	sb.WriteString(PadToWidth("", modalW-2) + "\n")
 
 	if len(devices) == 0 {
 		emptyMsg := StyleFaint.Render("  No devices found. Launch Spotify or spotumn.")
 		if isScanning {
 			emptyMsg = StyleMint.Render("  Scanning for Spotify Connect devices...")
 		}
-		sb.WriteString(PadToWidth(emptyMsg, modalW-2) + "\n\n")
+		sb.WriteString(PadToWidth(emptyMsg, modalW-2) + "\n")
+		sb.WriteString(PadToWidth("", modalW-2) + "\n")
 	} else {
-		for i, d := range devices {
-			if strings.EqualFold(d.Name, "spotumn") {
-				if i > 0 {
-					devCopy := make([]spotify.PlayerDevice, len(devices))
-					copy(devCopy, devices)
-					spotDev := devCopy[i]
-					copy(devCopy[1:i+1], devCopy[0:i])
-					devCopy[0] = spotDev
-					devices = devCopy
-				}
-				break
-			}
-		}
-
 		for i, d := range devices {
 			isSelected := i == selectedIdx
 			prefix := "  "
@@ -75,7 +65,7 @@ func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScann
 				sb.WriteString(PadToWidth(StyleNormal.Render(truncLine), modalW-2) + "\n")
 			}
 		}
-		sb.WriteString("\n")
+		sb.WriteString(PadToWidth("", modalW-2) + "\n")
 	}
 
 	footer := StyleFaint.Render("  [Enter] Select   [r] Rescan   [d/Esc] Close")
@@ -84,11 +74,6 @@ func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScann
 	}
 	sb.WriteString(PadToWidth(footer, modalW-2) + "\n")
 
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.ThickBorder()).
-		BorderForeground(CurrentTheme.Purple).
-		Bold(true).
-		Width(modalW)
-
+	boxStyle := PanelBox(true, modalW, 0)
 	return boxStyle.Render(sb.String())
 }

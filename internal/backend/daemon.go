@@ -89,7 +89,7 @@ func (d *Daemon) Start() error {
 							idx := strings.Index(line, "https://")
 							if idx != -1 {
 								url := strings.Fields(line[idx:])[0]
-								openURL(url)
+								OpenURL(url)
 							}
 						}
 					}
@@ -141,7 +141,8 @@ func (d *Daemon) Start() error {
 	return nil
 }
 
-func openURL(targetURL string) {
+// OpenURL opens the target URL in the default system browser.
+func OpenURL(targetURL string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":

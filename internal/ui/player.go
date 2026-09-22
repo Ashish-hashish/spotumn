@@ -56,7 +56,7 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 
 	var shuffIcon string
 	if shuffle {
-		shuffIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("󰒝")
+		shuffIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("󰒝")
 	} else {
 		shuffIcon = StyleFaint.Render("󰒞")
 	}
@@ -64,19 +64,21 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 	var repIcon string
 	switch repeat {
 	case "track":
-		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("󰑘")
+		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("󰑘")
 	case "context":
-		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("󰑖")
+		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("󰑖")
 	default:
 		repIcon = StyleFaint.Render("󰑗")
 	}
 
-	ctrls := fmt.Sprintf("%s   ⏮   %s   ⏭   %s", shuffIcon, playIcon, repIcon)
-	ctrlsStyled := StylePurple.Render(ctrls)
+	prevIcon := StylePurple.Render("⏮")
+	nextIcon := StylePurple.Render("⏭")
+	ctrlsStyled := shuffIcon + BgPad(3) + prevIcon + BgPad(3) + playIcon + BgPad(3) + nextIcon + BgPad(3) + repIcon
 
 	volBar := RenderMiniSlider(volume, 8)
-	rightInfo := fmt.Sprintf("Vol: [%s] %2d%% ", volBar, volume)
-	rightStyled := StyleFaint.Render(rightInfo)
+	volPrefix := StyleFaint.Render("Vol: [")
+	volSuffix := StyleFaint.Render(fmt.Sprintf("] %2d%% ", volume))
+	rightStyled := volPrefix + volBar + volSuffix
 
 	lines = append(lines, alignRow(leftStyled, ctrlsStyled, rightStyled, width))
 
@@ -99,7 +101,7 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 		}
 	}
 	seekBar := renderProgressBar(seekRatio, seekW)
-	seekLine := fmt.Sprintf(" %s %s %s ", elapsedStr, seekBar, totalStr)
+	seekLine := BgPad(1) + StyleFaint.Render(elapsedStr) + BgPad(1) + seekBar + BgPad(1) + StyleFaint.Render(totalStr) + BgPad(1)
 	lines = append(lines, PadToWidth(seekLine, width))
 
 	return lines
@@ -118,7 +120,7 @@ func RenderPlayer(state *backend.PlaybackState, focused bool, width int) string 
 	if state != nil && state.DeviceName != "" {
 		devName = state.DeviceName
 	}
-	devTag := " " + StyleLavender.Render("󰓃 "+TruncateString(devName, 18)) + " ─"
+	devTag := BgPad(1) + StyleLavender.Render("󰓃 "+TruncateString(devName, 18)) + StyleFaint.Render(" ─")
 	rawDevTag := " 󰓃 " + TruncateString(devName, 18) + " ─"
 	devTagW := ansi.StringWidth(rawDevTag)
 
@@ -126,9 +128,9 @@ func RenderPlayer(state *backend.PlaybackState, focused bool, width int) string 
 	cornerTR := "╮"
 	cornerBL := "╰"
 	cornerBR := "╯"
-	borderStyle := lipgloss.NewStyle().Foreground(CurrentTheme.Overlay)
+	borderStyle := lipgloss.NewStyle().Foreground(CurrentTheme.Outline).Background(CurrentTheme.Surface)
 	if focused {
-		borderStyle = lipgloss.NewStyle().Foreground(CurrentTheme.Purple).Bold(true)
+		borderStyle = lipgloss.NewStyle().Foreground(CurrentTheme.Primary).Background(CurrentTheme.Surface).Bold(true)
 	}
 
 	dashesLen := contentW - devTagW
@@ -175,8 +177,8 @@ func renderProgressBar(ratio float64, width int) string {
 	}
 	emptyChars := width - filledChars
 
-	filled := lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render(strings.Repeat("━", filledChars))
-	thumb := lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("●")
+	filled := lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render(strings.Repeat("━", filledChars))
+	thumb := lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("●")
 
 	if emptyChars > 0 {
 		empty := StyleFaint.Render(strings.Repeat("─", emptyChars-1))
@@ -205,6 +207,6 @@ func alignRow(left, center, right string, totalW int) string {
 		rightPad = 1
 	}
 
-	mid := left + strings.Repeat(" ", leftPad) + center + strings.Repeat(" ", rightPad) + right
+	mid := left + BgPad(leftPad) + center + BgPad(rightPad) + right
 	return PadToWidth(mid, totalW)
 }

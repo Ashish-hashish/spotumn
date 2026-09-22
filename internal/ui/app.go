@@ -8,12 +8,13 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"github.com/zmb3/spotify/v2"
 	"spotumn/internal/art"
 	"spotumn/internal/backend"
 	"spotumn/internal/config"
 	"spotumn/internal/lyrics"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/zmb3/spotify/v2"
 )
 
 type TickMsg time.Time
@@ -114,10 +115,10 @@ type AppModel struct {
 	lyricsManualScroll   bool
 	lyricsPointerMovedAt time.Time
 	artANSI              string
-	zenArtANSI         string
-	lastArtURL         string
-	lastDiskPath       string
-	lastTrackURI       string
+	zenArtANSI           string
+	lastArtURL           string
+	lastDiskPath         string
+	lastTrackURI         string
 
 	tickCount int
 
@@ -1327,7 +1328,7 @@ func (m *AppModel) View() tea.View {
 	v := tea.NewView(rendered)
 	v.AltScreen = true
 	v.WindowTitle = "spotumn"
-	// Native terminal background (zero background color override)
+	v.BackgroundColor = CurrentTheme.Surface
 	return v
 }
 
@@ -1585,4 +1586,3 @@ func (m *AppModel) defaultDeviceCmd() tea.Cmd {
 		return nil
 	}
 }
-

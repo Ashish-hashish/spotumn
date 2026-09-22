@@ -15,6 +15,7 @@ type Config struct {
 	Port        int    `yaml:"port"`
 	RedirectURI string `yaml:"redirect_uri"`
 	ArtRenderer string `yaml:"art_renderer"` // "auto", "image", "ansi"
+	Theme       string `yaml:"theme"`         // custom theme file or empty for default
 }
 
 func GetDir() string {
@@ -40,7 +41,7 @@ func Load() (*Config, error) {
 	configPath := filepath.Join(GetDir(), "config.yml")
 	data, err := os.ReadFile(configPath)
 	if err != nil && os.IsNotExist(err) {
-		template := "# spotumn configuration\nport: 8989\n# art_renderer: auto # auto, ansi\n"
+		template := "# spotumn configuration\nport: 8989\n# art_renderer: auto # auto, ansi\n# theme: # custom theme.yml path or leave empty for default\n"
 		_ = os.WriteFile(configPath, []byte(template), 0600)
 	} else if err == nil {
 		_ = yaml.Unmarshal(data, cfg)

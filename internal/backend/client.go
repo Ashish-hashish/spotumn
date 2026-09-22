@@ -778,17 +778,20 @@ func (c *Client) getTargetDeviceID(ctx context.Context) *spotify.ID {
 	return nil
 }
 
-// sortDevicesWithSpotumnFirst ensures spotumn is always the topmost device (index 0)
-func sortDevicesWithSpotumnFirst(devices []spotify.PlayerDevice) []spotify.PlayerDevice {
+// SortDevicesWithSpotumnFirst ensures spotumn is always the topmost device (index 0)
+func SortDevicesWithSpotumnFirst(devices []spotify.PlayerDevice) []spotify.PlayerDevice {
 	if len(devices) <= 1 {
 		return devices
 	}
 	for i, d := range devices {
 		if strings.EqualFold(d.Name, "spotumn") {
 			if i > 0 {
-				spotumnDev := devices[i]
-				copy(devices[1:i+1], devices[0:i])
-				devices[0] = spotumnDev
+				devCopy := make([]spotify.PlayerDevice, len(devices))
+				copy(devCopy, devices)
+				spotumnDev := devCopy[i]
+				copy(devCopy[1:i+1], devCopy[0:i])
+				devCopy[0] = spotumnDev
+				return devCopy
 			}
 			break
 		}
@@ -804,7 +807,7 @@ func (c *Client) GetDevices(ctx context.Context) ([]spotify.PlayerDevice, error)
 	if err != nil {
 		return nil, err
 	}
-	return sortDevicesWithSpotumnFirst(devices), nil
+	return SortDevicesWithSpotumnFirst(devices), nil
 }
 
 // TransferPlayback transfers active playback to the given device ID

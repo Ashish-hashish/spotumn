@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"spotumn/internal/backend"
 )
@@ -36,15 +35,8 @@ func RenderRightLines(
 
 	// Art lines (enlarged)
 	if artANSI != "" {
-		artRows := strings.Split(artANSI, "\n")
-		for _, row := range artRows {
-			rowW := ansi.StringWidth(row)
-			padLeft := (width - rowW) / 2
-			if padLeft < 0 {
-				padLeft = 0
-			}
-			centeredRow := strings.Repeat(" ", padLeft) + row
-			lines = append(lines, PadToWidth(centeredRow, width))
+		for _, row := range strings.Split(artANSI, "\n") {
+			lines = append(lines, CenterLine(row, width))
 		}
 	}
 
@@ -54,14 +46,14 @@ func RenderRightLines(
 		artistName := TruncateString(currentTrack.Artist, width-4)
 		albumName := TruncateString(currentTrack.Album, width-4)
 
-		lines = append(lines, PadToWidth("  "+StyleBold.Render(trackName), width))
-		lines = append(lines, PadToWidth("  "+StyleLavender.Render(artistName), width))
+		lines = append(lines, PadToWidth(BgPad(2)+StyleBold.Render(trackName), width))
+		lines = append(lines, PadToWidth(BgPad(2)+StyleLavender.Render(artistName), width))
 
 		if albumName != "" {
-			lines = append(lines, PadToWidth("  "+StyleFaint.Render(albumName), width))
+			lines = append(lines, PadToWidth(BgPad(2)+StyleFaint.Render(albumName), width))
 		}
 	} else {
-		lines = append(lines, PadToWidth("  "+StyleFaint.Render("No track playing"), width))
+		lines = append(lines, PadToWidth(BgPad(2)+StyleFaint.Render("No track playing"), width))
 	}
 
 	// Divider before Queue
@@ -130,7 +122,7 @@ func RenderRightLines(
 			rowText := numStyled + contentStyled
 			remPad := width - ansi.StringWidth(rowText)
 			if remPad > 0 {
-				rowText += strings.Repeat(" ", remPad)
+				rowText += BgPad(remPad)
 			}
 			lineContent = rowText
 		}
@@ -167,13 +159,6 @@ func RenderMergedRight(
 	}
 
 	lines := RenderRightLines(artANSI, currentTrack, queue, queueIndex, focused, contentW, contentH)
-
-	boxStyle := lipgloss.NewStyle().Width(width).Height(height)
-	if focused {
-		boxStyle = boxStyle.Border(lipgloss.ThickBorder()).BorderForeground(CurrentTheme.Purple).Bold(true)
-	} else {
-		boxStyle = boxStyle.Border(lipgloss.RoundedBorder()).BorderForeground(CurrentTheme.Overlay)
-	}
-
+	boxStyle := PanelBox(focused, width, height)
 	return boxStyle.Render(strings.Join(lines, "\n"))
 }

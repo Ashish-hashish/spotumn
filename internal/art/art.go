@@ -98,6 +98,9 @@ func (r *Renderer) Render(imageURL string, width, height int) (string, string, e
 		r.cacheKeys = r.cacheKeys[1:]
 		delete(r.memCache, oldest)
 	}
+	if len(r.diskCache) >= 20 {
+		r.diskCache = make(map[string]string, 20)
+	}
 	r.memCache[key] = rendered
 	r.diskCache[imageURL] = diskPath
 	r.cacheKeys = append(r.cacheKeys, key)

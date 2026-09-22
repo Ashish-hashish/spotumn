@@ -98,7 +98,7 @@ func TestSpotumnDeviceSorting(t *testing.T) {
 		{ID: "dev4", Name: "Echo Dot", Type: "Speaker"},
 	}
 
-	sorted := sortDevicesWithSpotumnFirst(devices)
+	sorted := SortDevicesWithSpotumnFirst(devices)
 	if len(sorted) != 4 {
 		t.Fatalf("expected 4 devices, got %d", len(sorted))
 	}

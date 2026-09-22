@@ -122,24 +122,14 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 		} else if isSelected {
 			lineContent = RenderPaddedLine(plainLine, StyleActiveUnfocusedBlock, width)
 		} else if starPrefix != "" {
-			starStyled := lipgloss.NewStyle().Foreground(CurrentTheme.Yellow).Bold(true).Render(prefix + starPrefix)
+			starStyled := lipgloss.NewStyle().Foreground(CurrentTheme.Gold).Background(CurrentTheme.Surface).Bold(true).Render(prefix + starPrefix)
 			nameStyled := StyleNormal.Render(truncName)
 			cntStyled := StyleFaint.Render(countStr)
-			combined := starStyled + nameStyled + cntStyled
-			remPad := width - ansi.StringWidth(combined)
-			if remPad < 0 {
-				remPad = 0
-			}
-			lineContent = PadToWidth(combined+strings.Repeat(" ", remPad), width)
+			lineContent = PadToWidth(starStyled+nameStyled+cntStyled, width)
 		} else {
 			nameStyled := StyleNormal.Render(prefix + truncName)
 			cntStyled := StyleFaint.Render(countStr)
-			combined := nameStyled + cntStyled
-			remPad := width - ansi.StringWidth(combined)
-			if remPad < 0 {
-				remPad = 0
-			}
-			lineContent = PadToWidth(combined+strings.Repeat(" ", remPad), width)
+			lineContent = PadToWidth(nameStyled+cntStyled, width)
 		}
 
 		lines = append(lines, lineContent)
@@ -167,14 +157,7 @@ func RenderNav(playlists []backend.Playlist, pinnedURIs map[string]bool, filter 
 	}
 
 	lines := RenderNavLines(playlists, pinnedURIs, filter, selectedIndex, focused, contentW, contentH)
-
-	boxStyle := lipgloss.NewStyle().Width(width).Height(height)
-	if focused {
-		boxStyle = boxStyle.Border(lipgloss.ThickBorder()).BorderForeground(CurrentTheme.Purple).Bold(true)
-	} else {
-		boxStyle = boxStyle.Border(lipgloss.RoundedBorder()).BorderForeground(CurrentTheme.Overlay)
-	}
-
+	boxStyle := PanelBox(focused, width, height)
 	return boxStyle.Render(strings.Join(lines, "\n"))
 }
 
@@ -185,5 +168,5 @@ func alignTwoItems(left, right string, totalW int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	return PadToWidth(left+strings.Repeat(" ", gap)+right, totalW)
+	return PadToWidth(left+BgPad(gap)+right, totalW)
 }

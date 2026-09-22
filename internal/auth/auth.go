@@ -9,17 +9,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"spotumn/internal/backend"
 	"spotumn/internal/config"
 
 	"golang.org/x/oauth2"
@@ -234,7 +234,7 @@ func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
 		}
 
 		if errStr := q.Get("error"); errStr != "" {
-			fmt.Fprintf(w, "<h3>Authentication error: %s</h3>", htmlEscape(errStr))
+			fmt.Fprintf(w, "<h3>Authentication error: %s</h3>", html.EscapeString(errStr))
 			errChan <- fmt.Errorf("spotify auth error: %s", errStr)
 			return
 		}
@@ -277,7 +277,7 @@ p { color: #a6adc8; font-size: 14px; }
 	}()
 
 	// Open browser or show URL
-	openBrowser(authURL)
+	backend.OpenURL(authURL)
 
 	// Wait for callback or context cancel
 	select {
@@ -296,9 +296,7 @@ p { color: #a6adc8; font-size: 14px; }
 			return nil, fmt.Errorf("token exchange failed: %w", err)
 		}
 
-		if err := a.SaveToken(tok); err != nil {
-			return tok, nil
-		}
+		_ = a.SaveToken(tok)
 		return tok, nil
 	}
 }
@@ -350,27 +348,4 @@ func (a *AuthService) exchangePKCE(ctx context.Context, code, verifier string) (
 	tok.Expiry = time.Now().Add(time.Duration(raw.ExpiresIn) * time.Second)
 
 	return &tok, nil
-}
-
-func openBrowser(targetURL string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "linux":
-		cmd = exec.Command("xdg-open", targetURL)
-	case "darwin":
-		cmd = exec.Command("open", targetURL)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", targetURL)
-	}
-	if cmd != nil {
-		_ = cmd.Start()
-	}
-}
-
-func htmlEscape(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	s = strings.ReplaceAll(s, "\"", "&quot;")
-	return s
 }

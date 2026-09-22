@@ -193,16 +193,78 @@ func TestRenderZenMode(t *testing.T) {
 }
 
 func TestDynamicThemeSwitching(t *testing.T) {
-	// Dark mode
-	SetTheme(false)
-	if CurrentTheme.Purple == nil || CurrentTheme.Mint == nil {
+	// Dark mode (Catppuccin Mocha)
+	SetTheme(true)
+	if CurrentTheme.Primary == nil || CurrentTheme.Tertiary == nil {
 		t.Fatal("dark theme colors missing")
 	}
+	if CurrentTheme.Surface == nil || CurrentTheme.OnSurface == nil {
+		t.Fatal("dark theme surface colors missing")
+	}
 
-	// Light mode
-	SetTheme(true)
-	if CurrentTheme.Purple == nil || CurrentTheme.Mint == nil {
+	// Light mode (Catppuccin Latte)
+	SetTheme(false)
+	if CurrentTheme.Primary == nil || CurrentTheme.Tertiary == nil {
 		t.Fatal("light theme colors missing")
+	}
+	if CurrentTheme.Surface == nil || CurrentTheme.OnSurface == nil {
+		t.Fatal("light theme surface colors missing")
+	}
+
+	// Revert to dark for consistent testing
+	SetTheme(true)
+}
+
+func TestCustomThemeConfig(t *testing.T) {
+	// Test SetThemeFromConfig with a fully custom palette
+	customCfg := ThemeConfig{
+		MPrimary:          "#ff0000",
+		MOnPrimary:        "#ffffff",
+		MSecondary:        "#00ff00",
+		MOnSecondary:      "#000000",
+		MTertiary:         "#0000ff",
+		MOnTertiary:       "#ffffff",
+		MError:            "#ff00ff",
+		MOnError:          "#000000",
+		MSurface:          "#111111",
+		MOnSurface:        "#eeeeee",
+		MSurfaceVariant:   "#222222",
+		MOnSurfaceVariant: "#cccccc",
+		MOutline:          "#555555",
+		MShadow:           "#000000",
+		MHover:            "#ffaa00",
+		MOnHover:          "#000000",
+		MGold:             "#ffd700",
+		MSuccess:          "#00cc00",
+	}
+
+	SetThemeFromConfig(customCfg)
+
+	if CurrentTheme.Primary == nil {
+		t.Fatal("custom theme Primary should be set")
+	}
+	if CurrentTheme.Surface == nil {
+		t.Fatal("custom theme Surface should be set")
+	}
+	if CurrentTheme.Gold == nil {
+		t.Fatal("custom theme Gold should be set")
+	}
+
+	// Test that StyleBase has background set (renders non-empty)
+	rendered := StyleBase.Render(" ")
+	if rendered == "" {
+		t.Error("StyleBase should produce non-empty output")
+	}
+
+	// Test mergeConfig: partial override keeps defaults for unset fields
+	base := catppuccinMocha()
+	partial := ThemeConfig{MPrimary: "#abcdef"}
+	merged := mergeConfig(base, partial)
+	if merged.MPrimary != "#abcdef" {
+		t.Errorf("expected merged MPrimary '#abcdef', got '%s'", merged.MPrimary)
+	}
+	if merged.MSurface != base.MSurface {
+		t.Errorf("expected merged MSurface to remain default '%s', got '%s'", base.MSurface, merged.MSurface)
 	}
 
 	// Revert to dark for consistent testing
@@ -982,5 +1044,301 @@ func TestCenterPaneScrollbar(t *testing.T) {
 	}
 	if !strings.Contains(stripped, "│") {
 		t.Error("expected vertical scrollbar rail '│' in center pane when content exceeds height")
+	}
+}
+
+func TestCenterLineAndOverlayBackground(t *testing.T) {
+	SetTheme(true)
+
+	// Test CenterLine width and background
+	centered := CenterLine("Test Lyric", 50)
+	if w := ansi.StringWidth(centered); w != 50 {
+		t.Errorf("expected visual width 50, got %d", w)
+	}
+	if !strings.Contains(centered, "\x1b[") {
+		t.Error("expected ANSI background codes in centered line padding")
+	}
+
+	// Test CenterOverlay dimensions and full background fill
+	modal := "╭──────╮\n│ Modal│\n╰──────╯"
+	overlay := CenterOverlay(modal, 60, 15)
+	lines := strings.Split(overlay, "\n")
+	if len(lines) != 15 {
+		t.Fatalf("expected 15 lines in overlay, got %d", len(lines))
+	}
+	for i, l := range lines {
+		if w := ansi.StringWidth(l); w != 60 {
+			t.Errorf("line %d: expected width 60, got %d", i, w)
+		}
+		if !strings.Contains(l, "\x1b[") {
+			t.Errorf("line %d: expected ANSI codes for surface fill", i)
+		}
+	}
+}
+
+func TestSearchBarThemeBackground(t *testing.T) {
+	SetTheme(true)
+
+	// Test search bar with empty query (placeholder)
+	emptyLines := renderProminentSearchBar("", false, 60)
+	if len(emptyLines) != 3 { // top border, content, bottom border
+		t.Fatalf("expected 3 lines in search bar, got %d", len(emptyLines))
+	}
+	for _, l := range emptyLines {
+		if w := ansi.StringWidth(l); w != 60 {
+			t.Errorf("expected search bar line width 60, got %d", w)
+		}
+		if !strings.Contains(l, "\x1b[") {
+			t.Errorf("expected ANSI background codes across search bar line")
+		}
+	}
+
+	// Test search bar with typed query
+	typedLines := renderProminentSearchBar("Radiohead", true, 60)
+	for _, l := range typedLines {
+		if w := ansi.StringWidth(l); w != 60 {
+			t.Errorf("expected search bar line width 60, got %d", w)
+		}
+		if !strings.Contains(l, "\x1b[") {
+			t.Errorf("expected ANSI background codes across search bar line")
+		}
+	}
+}
+
+func checkLineBackgrounds(t *testing.T, line string, expectedWidth int, lineDesc string) {
+	t.Helper()
+	hasBg := false
+	col := 0
+	inEsc := false
+	escBuf := ""
+
+	runes := []rune(line)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if r == 0x1b {
+			inEsc = true
+			escBuf = string(r)
+			continue
+		}
+		if inEsc {
+			escBuf += string(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+				if strings.HasPrefix(escBuf, "\x1b[") && strings.HasSuffix(escBuf, "m") {
+					params := escBuf[2 : len(escBuf)-1]
+					parts := strings.Split(params, ";")
+					for j := 0; j < len(parts); j++ {
+						p := parts[j]
+						if p == "0" || p == "" {
+							hasBg = false
+						} else if p == "49" {
+							hasBg = false
+						} else if p == "48" {
+							// 48;2;r;g;b or 48;5;n
+							hasBg = true
+							if j+1 < len(parts) && parts[j+1] == "2" {
+								j += 4
+							} else if j+1 < len(parts) && parts[j+1] == "5" {
+								j += 2
+							}
+						} else if len(p) == 2 && (p[0] == '4' && p[1] >= '0' && p[1] <= '7') {
+							hasBg = true
+						} else if len(p) == 3 && (strings.HasPrefix(p, "10") && p[2] >= '0' && p[2] <= '7') {
+							hasBg = true
+						}
+					}
+				}
+			}
+			continue
+		}
+
+		// Printable character or space
+		w := ansi.StringWidth(string(r))
+		if w > 0 {
+			if !hasBg {
+				t.Errorf("%s: unstyled cell at col %d (char %q)\nRAW: %q", lineDesc, col, r, line)
+				return
+			}
+			col += w
+		}
+	}
+
+	if col != expectedWidth {
+		t.Errorf("%s: line width = %d, expected %d", lineDesc, col, expectedWidth)
+	}
+}
+
+func TestAuditAllScreensForUnstyledPixels(t *testing.T) {
+	SetTheme(true)
+
+	// Base params
+	w, h := 100, 30
+	baseParams := ViewParams{
+		Width:            w,
+		Height:           h,
+		Focused:          PaneNav,
+		CurrentTab:       TabTracks,
+		ShowLeftSidebar:  true,
+		ShowRightSidebar: true,
+		NavIndex:         0,
+		CenterIndex:      0,
+		QueueIndex:       0,
+		Playlists: []backend.Playlist{
+			{ID: "1", Name: "Chill Mix", TrackCount: 42},
+			{ID: "2", Name: "Rock Classics", TrackCount: 88},
+		},
+		PinnedURIs: map[string]bool{"1": true},
+		Playback: &backend.PlaybackState{
+			Playing:    true,
+			ProgressMs: 75000,
+			DurationMs: 180000,
+			Volume:     65,
+			CurrentTrack: &backend.Track{
+				Name:   "Midnight City",
+				Artist: "M83",
+				Album:  "Hurry Up",
+				URI:    "track:1",
+			},
+		},
+		Queue: []backend.Track{
+			{Name: "Next Song", Artist: "Artist 1"},
+		},
+		LyricsLines: []lyrics.Line{
+			{TimeMs: 70000, Text: "Active lyric line"},
+			{TimeMs: 80000, Text: "Upcoming lyric line"},
+		},
+		ArtANSI: "██████\n██████\n██████",
+	}
+
+	testCases := []struct {
+		name   string
+		modify func(p *ViewParams)
+	}{
+		{"NormalView_AllPanes", func(p *ViewParams) {}},
+		{"NormalView_NoSidebars", func(p *ViewParams) { p.ShowLeftSidebar = false; p.ShowRightSidebar = false }},
+		{"NormalView_LeftSidebarOnly", func(p *ViewParams) { p.ShowRightSidebar = false }},
+		{"NormalView_RightSidebarOnly", func(p *ViewParams) { p.ShowLeftSidebar = false }},
+		{"NormalView_LyricsTab", func(p *ViewParams) { p.CurrentTab = TabLyrics }},
+		{"NormalView_HistoryTab", func(p *ViewParams) { p.CurrentTab = TabHistory; p.History = p.Queue }},
+		{"NormalView_SearchFocusedEmpty", func(p *ViewParams) { p.SearchFocused = true; p.SearchQuery = "" }},
+		{"NormalView_SearchFocusedTyped", func(p *ViewParams) { p.SearchFocused = true; p.SearchQuery = "Hello" }},
+		{"NormalView_MultiSectionSearch", func(p *ViewParams) {
+			p.PlaylistTracks = p.Queue
+			p.ArtistAlbums = []backend.Playlist{{ID: "a1", Name: "Album 1", TrackCount: 10, OwnerID: "2024"}}
+			p.SearchArtists = []backend.Playlist{{ID: "ar1", Name: "Artist 1", TrackCount: 85, OwnerID: "Artist"}}
+		}},
+		{"NormalView_AlbumsFilter", func(p *ViewParams) {
+			p.PlaylistFilter = FilterAlbums
+		}},
+		{"NormalView_ArtistsFilter", func(p *ViewParams) {
+			p.PlaylistFilter = FilterArtists
+		}},
+		{"NormalView_EmptyPlaylist", func(p *ViewParams) {
+			p.PlaylistTracks = nil
+			p.Playlists = nil
+		}},
+		{"NormalView_SmallMinSize", func(p *ViewParams) {
+			p.Width = 48
+			p.Height = 16
+		}},
+		{"NormalView_LargeSize", func(p *ViewParams) {
+			p.Width = 140
+			p.Height = 45
+		}},
+		{"ZenMode_Both", func(p *ViewParams) { p.ZenMode = true; p.ZenView = ZenViewBoth }},
+		{"ZenMode_ArtOnly", func(p *ViewParams) { p.ZenMode = true; p.ZenView = ZenViewArt }},
+		{"ZenMode_LyricsOnly", func(p *ViewParams) { p.ZenMode = true; p.ZenView = ZenViewLyrics }},
+		{"ZenMode_NoLyrics", func(p *ViewParams) { p.ZenMode = true; p.ZenView = ZenViewLyrics; p.LyricsLines = nil }},
+		{"Modal_Help", func(p *ViewParams) { p.ShowHelp = true }},
+		{"Modal_HelpEditing", func(p *ViewParams) { p.ShowHelp = true; p.HelpEditing = true }},
+		{"Modal_Devices", func(p *ViewParams) {
+			p.ShowDevices = true
+			p.Devices = []spotify.PlayerDevice{{ID: "1", Name: "Speaker", Active: true}}
+		}},
+		{"Modal_DevicesScanning", func(p *ViewParams) {
+			p.ShowDevices = true
+			p.DeviceScanning = true
+		}},
+		{"Modal_DevicesEmpty", func(p *ViewParams) {
+			p.ShowDevices = true
+			p.Devices = nil
+		}},
+		{"SmallWindow", func(p *ViewParams) { p.Width = 40; p.Height = 10 }},
+	}
+
+	themeModes := []struct {
+		themeName string
+		isDark    bool
+	}{
+		{"Mocha_Dark", true},
+		{"Latte_Light", false},
+	}
+
+	for _, tm := range themeModes {
+		t.Run(tm.themeName, func(t *testing.T) {
+			SetTheme(tm.isDark)
+			for _, tc := range testCases {
+				t.Run(tc.name, func(t *testing.T) {
+					p := baseParams
+					tc.modify(&p)
+					rendered := RenderFullUI(p)
+					lines := strings.Split(rendered, "\n")
+					if len(lines) != p.Height {
+						t.Fatalf("expected %d lines, got %d", p.Height, len(lines))
+					}
+					for lineIdx, line := range lines {
+						desc := fmt.Sprintf("[%s/%s] Line %d", tm.themeName, tc.name, lineIdx)
+						checkLineBackgrounds(t, line, p.Width, desc)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestScrollbarDoesNotInterfereOrTruncate(t *testing.T) {
+	SetTheme(true)
+	// Create 30 tracks so scrollbar is active
+	var tracks []backend.Track
+	for i := 1; i <= 30; i++ {
+		tracks = append(tracks, backend.Track{
+			Name:       fmt.Sprintf("Song Title Number %d", i),
+			Artist:     "Famous Artist",
+			DurationMs: 180000 + (i * 1000), // ~03:00 to ~03:30
+			URI:        fmt.Sprintf("spotify:track:%d", i),
+		})
+	}
+
+	w, h := 90, 25
+	rendered := RenderFullUI(ViewParams{
+		Width:          w,
+		Height:         h,
+		CurrentTab:     TabTracks,
+		PlaylistTracks: tracks,
+		PlaylistName:   "Favorites",
+	})
+
+	lines := strings.Split(rendered, "\n")
+	hasScrollbar := false
+	for lineIdx, line := range lines {
+		if strings.Contains(line, "█") || strings.Contains(line, "│") {
+			hasScrollbar = true
+		}
+		// Duration lines like 03:01 should NOT end with … before the scrollbar
+		if strings.Contains(line, "03:") {
+			if strings.Contains(line, "…") {
+				t.Errorf("Line %d has unexpected ellipsis truncation: %s", lineIdx, line)
+			}
+		}
+		// Table header Time should NOT have ellipsis
+		if strings.Contains(line, "Time") {
+			if strings.Contains(line, "Time…") || strings.Contains(line, "Time …") {
+				t.Errorf("Line %d has unexpected ellipsis on Time header: %s", lineIdx, line)
+			}
+		}
+	}
+
+	if !hasScrollbar {
+		t.Error("expected scrollbar to be rendered for 30 tracks")
 	}
 }

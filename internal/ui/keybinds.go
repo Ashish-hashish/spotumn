@@ -2,14 +2,11 @@ package ui
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"spotumn/internal/config"
-
-	"charm.land/lipgloss/v2"
 )
 
 const (
@@ -258,13 +255,14 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 	}
 
 	var sb strings.Builder
-	sb.WriteString("\n")
+	sb.WriteString(PadToWidth("", modalW-2) + "\n")
 
 	// Friendly volume and seek cooldown note at the top
 	sb.WriteString(PadToWidth(StyleMint.Render("  ℹ  Tip:"), modalW-2) + "\n")
 	sb.WriteString(PadToWidth(StyleNormal.Render("     Spotify limits how fast volume requests can be sent over the internet."), modalW-2) + "\n")
 	sb.WriteString(PadToWidth(StyleFaint.Render("     Pressing volume/seek rapidly has a brief cooldown (~200ms) so Spotify doesn't rate-limit you."), modalW-2) + "\n")
-	sb.WriteString(PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n\n")
+	sb.WriteString(PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n")
+	sb.WriteString(PadToWidth("", modalW-2) + "\n")
 
 	// Calculate visible viewport height for keybind cards
 	availH := height - 18
@@ -335,7 +333,7 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 			keyPill = "◖" + keyText + "◗*"
 		}
 
-		pillFormatted := PadToWidth(keyPill, 16)
+		pillFormatted := PadPlain(keyPill, 16)
 		descFormatted := TruncateString(item.Desc, contentW-20)
 
 		// Vertical scrollbar indicator
@@ -347,13 +345,13 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 				scrollIndicator = StyleFaint.Render("│")
 			}
 		} else {
-			scrollIndicator = " "
+			scrollIndicator = BgPad(1)
 		}
 
-		rawLine := fmt.Sprintf("%s%s %s", prefix, pillFormatted, descFormatted)
 		if isSelected {
+			rawLine := prefix + pillFormatted + " " + descFormatted
 			lineContent := RenderPaddedLine(rawLine, StyleActiveFocusedBlock, contentW)
-			sb.WriteString(PadToWidth(lineContent+" "+scrollIndicator, modalW-2) + "\n")
+			sb.WriteString(PadToWidth(lineContent+BgPad(1)+scrollIndicator, modalW-2) + "\n")
 		} else {
 			var styledPill string
 			if item.Key != item.DefaultKey {
@@ -361,30 +359,26 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 			} else {
 				styledPill = StyleLavender.Render(pillFormatted)
 			}
-			styledLine := prefix + styledPill + " " + StyleNormal.Render(descFormatted)
+			styledPrefix := StyleNormal.Render(prefix)
+			styledLine := styledPrefix + styledPill + BgPad(1) + StyleNormal.Render(descFormatted)
 			lineContent := PadToWidth(styledLine, contentW)
-			sb.WriteString(PadToWidth(lineContent+" "+scrollIndicator, modalW-2) + "\n")
+			sb.WriteString(PadToWidth(lineContent+BgPad(1)+scrollIndicator, modalW-2) + "\n")
 		}
 	}
 
-	sb.WriteString("\n" + PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n")
+	sb.WriteString(PadToWidth("", modalW-2) + "\n" + PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n")
 
 	var footer string
 	if isEditing {
-		footer = "  " + StyleMint.Render("⌨  Press any key to assign...") + StyleFaint.Render("   [Esc] Cancel")
+		footer = BgPad(2) + StyleMint.Render("⌨  Press any key to assign...") + BgPad(3) + StyleFaint.Render("[Esc] Cancel")
 	} else {
-		footer = "  " + StyleLavender.Render("[↑/↓/j/k]") + StyleFaint.Render(" Nav   ") +
+		footer = BgPad(2) + StyleLavender.Render("[↑/↓/j/k]") + StyleFaint.Render(" Nav   ") +
 			StylePurple.Render("[Enter]") + StyleFaint.Render(" Edit   ") +
 			StyleMint.Render("[0]") + StyleFaint.Render(" Reset   ") +
 			StyleLavender.Render("[?/Esc]") + StyleFaint.Render(" Close")
 	}
 	sb.WriteString(PadToWidth(footer, modalW-2) + "\n")
 
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.ThickBorder()).
-		BorderForeground(CurrentTheme.Purple).
-		Bold(true).
-		Width(modalW)
-
+	boxStyle := PanelBox(true, modalW, 0)
 	return boxStyle.Render(sb.String())
 }

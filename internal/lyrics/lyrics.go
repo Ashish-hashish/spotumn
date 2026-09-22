@@ -107,19 +107,23 @@ func (p *Provider) fetchFromURL(targetURL string, isArray bool) []Line {
 				return parsePlain(item.PlainLyrics)
 			}
 		}
-	} else {
-		var item lrclibItem
-		if err := json.NewDecoder(limitReader).Decode(&item); err != nil {
-			return nil
-		}
-		if item.SyncedLyrics != "" {
-			return parseLRC(item.SyncedLyrics)
-		}
-		if item.PlainLyrics != "" {
-			return parsePlain(item.PlainLyrics)
-		}
+		return nil
 	}
 
+	var item lrclibItem
+	if err := json.NewDecoder(limitReader).Decode(&item); err != nil {
+		return nil
+	}
+	return extractItemLyrics(item)
+}
+
+func extractItemLyrics(item lrclibItem) []Line {
+	if item.SyncedLyrics != "" {
+		return parseLRC(item.SyncedLyrics)
+	}
+	if item.PlainLyrics != "" {
+		return parsePlain(item.PlainLyrics)
+	}
 	return nil
 }
 

@@ -77,6 +77,8 @@ func RenderFullUI(p ViewParams) string {
 		return lipgloss.NewStyle().
 			Width(p.Width).
 			Height(p.Height).
+			Background(CurrentTheme.Surface).
+			Foreground(CurrentTheme.OnSurface).
 			Align(lipgloss.Center, lipgloss.Center).
 			Render(msg)
 	}
@@ -171,27 +173,31 @@ func RenderFullUI(p ViewParams) string {
 	)
 
 	var views []string
+	var viewWidths []int
 	if navW > 0 {
 		views = append(views, RenderNav(p.Playlists, p.PinnedURIs, p.PlaylistFilter, p.NavIndex, p.Focused == PaneNav, navW, bodyH))
+		viewWidths = append(viewWidths, navW)
 	}
 	views = append(views, centerView)
+	viewWidths = append(viewWidths, centerW)
 	if rightW > 0 {
 		views = append(views, RenderMergedRight(p.ArtANSI, curTrack, p.Queue, p.QueueIndex, p.Focused == PaneRight, rightW, bodyH))
+		viewWidths = append(viewWidths, rightW)
 	}
-	bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, views...)
+	bodyContent := joinHorizontalThemed(views, viewWidths, bodyH)
 
 	playerView := RenderPlayer(p.Playback, p.Focused == PanePlayer, innerW)
-	innerCombined := lipgloss.JoinVertical(lipgloss.Left, bodyContent, playerView)
+	innerCombined := bodyContent + "\n" + playerView
 
 	// Construct overall outer border with green dot before spotumn and person icon before username
 	userName := p.Username
 
-	greenDot := lipgloss.NewStyle().Foreground(CurrentTheme.Green).Render("● ")
+	greenDot := lipgloss.NewStyle().Foreground(CurrentTheme.Success).Background(CurrentTheme.Surface).Render("● ")
 	titleTag := StyleFaint.Render("─ ") + greenDot + StylePurple.Render("spotumn ")
 	var userTag string
 	if userName != "" {
 		personIcon := StyleLavender.Render(" ")
-		userTag = " " + personIcon + StyleLavender.Render(userName) + StyleFaint.Render(" ─")
+		userTag = BgPad(1) + personIcon + StyleLavender.Render(userName) + StyleFaint.Render(" ─")
 	}
 
 	middleDashesLen := innerW - ansi.StringWidth(titleTag) - ansi.StringWidth(userTag)
@@ -201,17 +207,9 @@ func RenderFullUI(p ViewParams) string {
 
 	cornerTL := StyleFaint.Render("╭")
 	cornerTR := StyleFaint.Render("╮")
-	cornerBL := StyleFaint.Render("╰")
-	cornerBR := StyleFaint.Render("╯")
 	sideBar := StyleFaint.Render("│")
 
 	topBorder := cornerTL + titleTag + StyleFaint.Render(strings.Repeat("─", middleDashesLen)) + userTag + cornerTR
-
-	// Format bottom border with funky pill keybind shortcuts embedded inside the frame
-	type keybindItem struct {
-		key   string
-		label string
-	}
 
 	var items []keybindItem
 	if innerW >= 85 {
@@ -242,32 +240,7 @@ func RenderFullUI(p ViewParams) string {
 		}
 	}
 
-	var renderedParts []string
-	var rawParts []string
-	dashSep := StyleFaint.Render(" ─ ")
-	for _, it := range items {
-		pill := StylePurple.Render("◖") + StyleBold.Render(it.key) + StylePurple.Render("◗")
-		renderedParts = append(renderedParts, pill+" "+StyleLavender.Render(it.label))
-		rawParts = append(rawParts, "◖"+it.key+"◗ "+it.label)
-	}
-
-	renderedShortcuts := " " + strings.Join(renderedParts, dashSep) + " "
-	rawShortcuts := " " + strings.Join(rawParts, " ─ ") + " "
-	shortcutsWidth := ansi.StringWidth(rawShortcuts)
-
-	var bottomBorder string
-	if innerW > shortcutsWidth+4 {
-		remDashes := innerW - shortcutsWidth
-		leftD := remDashes / 2
-		rightD := remDashes - leftD
-		bottomBorder = cornerBL +
-			StyleFaint.Render(strings.Repeat("─", leftD)) +
-			renderedShortcuts +
-			StyleFaint.Render(strings.Repeat("─", rightD)) +
-			cornerBR
-	} else {
-		bottomBorder = cornerBL + StyleFaint.Render(strings.Repeat("─", innerW)) + cornerBR
-	}
+	bottomBorder := renderKeybindBar(items, innerW)
 
 	var finalLines []string
 	finalLines = append(finalLines, PadToWidth(topBorder, p.Width))
@@ -295,34 +268,48 @@ func RenderFullUI(p ViewParams) string {
 	return strings.Join(finalLines, "\n")
 }
 
+type keybindItem struct {
+	key   string
+	label string
+}
+
+func renderKeybindBar(items []keybindItem, innerW int) string {
+	var renderedParts []string
+	var rawParts []string
+	dashSep := StyleFaint.Render(" ─ ")
+	for _, it := range items {
+		pill := StylePurple.Render("◖") + StyleBold.Render(it.key) + StylePurple.Render("◗")
+		renderedParts = append(renderedParts, pill+BgPad(1)+StyleLavender.Render(it.label))
+		rawParts = append(rawParts, "◖"+it.key+"◗ "+it.label)
+	}
+
+	rawShortcuts := " " + strings.Join(rawParts, " ─ ") + " "
+	shortcutsWidth := ansi.StringWidth(rawShortcuts)
+
+	cornerBL := StyleFaint.Render("╰")
+	cornerBR := StyleFaint.Render("╯")
+
+	if innerW > shortcutsWidth+4 {
+		remDashes := innerW - shortcutsWidth
+		leftD := remDashes / 2
+		rightD := remDashes - leftD
+		return cornerBL +
+			StyleFaint.Render(strings.Repeat("─", leftD)) +
+			BgPad(1) + strings.Join(renderedParts, dashSep) + BgPad(1) +
+			StyleFaint.Render(strings.Repeat("─", rightD)) +
+			cornerBR
+	}
+	return cornerBL + StyleFaint.Render(strings.Repeat("─", innerW)) + cornerBR
+}
+
 func renderHelpOverlay(p ViewParams) string {
 	modal := RenderKeybindsModal(p.KeybindItems, p.HelpIndex, p.HelpEditing, p.Width, p.Height)
-
-	placed := lipgloss.Place(p.Width, p.Height, lipgloss.Center, lipgloss.Center, modal)
-
-	var lines []string
-	for _, l := range strings.Split(placed, "\n") {
-		lines = append(lines, PadToWidth(l, p.Width))
-	}
-	for len(lines) < p.Height {
-		lines = append(lines, PadToWidth("", p.Width))
-	}
-	return strings.Join(lines[:p.Height], "\n")
+	return CenterOverlay(modal, p.Width, p.Height)
 }
 
 func renderDevicesOverlay(p ViewParams) string {
 	modal := RenderDevicesModal(p.Devices, p.DeviceIndex, p.DeviceScanning, p.Width, p.Height)
-
-	placed := lipgloss.Place(p.Width, p.Height, lipgloss.Center, lipgloss.Center, modal)
-
-	var lines []string
-	for _, l := range strings.Split(placed, "\n") {
-		lines = append(lines, PadToWidth(l, p.Width))
-	}
-	for len(lines) < p.Height {
-		lines = append(lines, PadToWidth("", p.Width))
-	}
-	return strings.Join(lines[:p.Height], "\n")
+	return CenterOverlay(modal, p.Width, p.Height)
 }
 
 // renderZenLyrics renders centered, vertically-aligned synchronized lyrics for Zen Mode
@@ -337,11 +324,10 @@ func renderZenLyrics(lines []lyrics.Line, cursorLine int, progressMs int, width,
 
 	if len(lines) == 0 {
 		msg := StyleFaint.Render("No synced lyrics available")
-		centeredMsg := lipgloss.PlaceHorizontal(width, lipgloss.Center, msg)
 		midRow := height / 2
 		for i := 0; i < height; i++ {
 			if i == midRow {
-				output = append(output, PadToWidth(centeredMsg, width))
+				output = append(output, CenterLine(msg, width))
 			} else {
 				output = append(output, PadToWidth("", width))
 			}
@@ -379,17 +365,16 @@ func renderZenLyrics(lines []lyrics.Line, cursorLine int, progressMs int, width,
 
 		var styledText string
 		if isCursor && isSinging {
-			styledText = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("❯  " + text + "  ❮")
+			styledText = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("❯  " + text + "  ❮")
 		} else if isCursor {
-			styledText = lipgloss.NewStyle().Foreground(CurrentTheme.Purple).Bold(true).Render("➜  " + text + "  ➜")
+			styledText = lipgloss.NewStyle().Foreground(CurrentTheme.Primary).Background(CurrentTheme.Surface).Bold(true).Render("➜  " + text + "  ➜")
 		} else if isSinging {
-			styledText = lipgloss.NewStyle().Foreground(CurrentTheme.Mint).Bold(true).Render("❯  " + text + "  ❮")
+			styledText = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("❯  " + text + "  ❮")
 		} else {
 			styledText = StyleFaint.Render(text)
 		}
 
-		centered := lipgloss.PlaceHorizontal(width, lipgloss.Center, styledText)
-		output = append(output, PadToWidth(centered, width))
+		output = append(output, CenterLine(styledText, width))
 	}
 
 	return output
@@ -399,11 +384,11 @@ func renderZenMode(p ViewParams) string {
 	innerW := p.Width - 2
 	innerH := p.Height - 2
 
-	greenDot := lipgloss.NewStyle().Foreground(CurrentTheme.Green).Render("● ")
+	greenDot := lipgloss.NewStyle().Foreground(CurrentTheme.Success).Background(CurrentTheme.Surface).Render("● ")
 	titleTag := StyleFaint.Render("─ ") + greenDot + StylePurple.Render("spotumn ") + StyleLavender.Render("◖Zen Mode◗")
 	viewModeStr := p.ZenView.String()
 	viewBadge := StylePurple.Render("◖") + StyleBold.Render(viewModeStr) + StylePurple.Render("◗")
-	viewTag := " " + viewBadge + StyleFaint.Render(" ─")
+	viewTag := BgPad(1) + viewBadge + StyleFaint.Render(" ─")
 
 	rawTitle := "─ ● spotumn ◖Zen Mode◗"
 	rawView := " ◖" + viewModeStr + "◗ ─"
@@ -414,16 +399,10 @@ func renderZenMode(p ViewParams) string {
 
 	cornerTL := StyleFaint.Render("╭")
 	cornerTR := StyleFaint.Render("╮")
-	cornerBL := StyleFaint.Render("╰")
-	cornerBR := StyleFaint.Render("╯")
 	sideBar := StyleFaint.Render("│")
 
 	topBorder := cornerTL + titleTag + StyleFaint.Render(strings.Repeat("─", middleDashesLen)) + viewTag + cornerTR
 
-	type keybindItem struct {
-		key   string
-		label string
-	}
 	var items []keybindItem
 	if innerW >= 70 {
 		items = []keybindItem{
@@ -449,32 +428,7 @@ func renderZenMode(p ViewParams) string {
 		}
 	}
 
-	var renderedParts []string
-	var rawParts []string
-	dashSep := StyleFaint.Render(" ─ ")
-	for _, it := range items {
-		pill := StylePurple.Render("◖") + StyleBold.Render(it.key) + StylePurple.Render("◗")
-		renderedParts = append(renderedParts, pill+" "+StyleLavender.Render(it.label))
-		rawParts = append(rawParts, "◖"+it.key+"◗ "+it.label)
-	}
-
-	renderedShortcuts := " " + strings.Join(renderedParts, dashSep) + " "
-	rawShortcuts := " " + strings.Join(rawParts, " ─ ") + " "
-	shortcutsWidth := ansi.StringWidth(rawShortcuts)
-
-	var bottomBorder string
-	if innerW > shortcutsWidth+4 {
-		remDashes := innerW - shortcutsWidth
-		leftD := remDashes / 2
-		rightD := remDashes - leftD
-		bottomBorder = cornerBL +
-			StyleFaint.Render(strings.Repeat("─", leftD)) +
-			renderedShortcuts +
-			StyleFaint.Render(strings.Repeat("─", rightD)) +
-			cornerBR
-	} else {
-		bottomBorder = cornerBL + StyleFaint.Render(strings.Repeat("─", innerW)) + cornerBR
-	}
+	bottomBorder := renderKeybindBar(items, innerW)
 
 	curProgress := 0
 	durationMs := 0
@@ -504,8 +458,7 @@ func renderZenMode(p ViewParams) string {
 	}
 
 	volBar := RenderMiniSlider(volume, 8)
-	volText := fmt.Sprintf("Vol: [%s] %2d%%", volBar, volume)
-	vStyled := StyleFaint.Render(volText)
+	vStyled := StyleFaint.Render("Vol: [") + volBar + StyleFaint.Render(fmt.Sprintf("] %2d%%", volume))
 
 	artANSI := p.ZenArtANSI
 	if artANSI == "" {
@@ -544,13 +497,7 @@ func renderZenMode(p ViewParams) string {
 				artRows = artRows[:maxArtRows]
 			}
 			for _, row := range artRows {
-				rowW := ansi.StringWidth(row)
-				padLeft := (leftW - rowW) / 2
-				if padLeft < 0 {
-					padLeft = 0
-				}
-				centered := strings.Repeat(" ", padLeft) + row
-				displayedArtRows = append(displayedArtRows, PadToWidth(centered, leftW))
+				displayedArtRows = append(displayedArtRows, CenterLine(row, leftW))
 			}
 		}
 
@@ -569,10 +516,10 @@ func renderZenMode(p ViewParams) string {
 
 		leftLines = append(leftLines, PadToWidth("", leftW))
 		tStyled := StyleBold.Render(TruncateString(trackName, leftW-4))
-		leftLines = append(leftLines, PadToWidth(lipgloss.PlaceHorizontal(leftW, lipgloss.Center, tStyled), leftW))
+		leftLines = append(leftLines, CenterLine(tStyled, leftW))
 
 		aStyled := StyleLavender.Render(TruncateString(artistName, leftW-4))
-		leftLines = append(leftLines, PadToWidth(lipgloss.PlaceHorizontal(leftW, lipgloss.Center, aStyled), leftW))
+		leftLines = append(leftLines, CenterLine(aStyled, leftW))
 
 		leftLines = append(leftLines, PadToWidth("", leftW))
 
@@ -581,7 +528,7 @@ func renderZenMode(p ViewParams) string {
 			ctrls = fmt.Sprintf("%s  %s  %s", elapsed, playIcon, total)
 		}
 		cStyled := StylePurple.Render(ctrls)
-		leftLines = append(leftLines, PadToWidth(lipgloss.PlaceHorizontal(leftW, lipgloss.Center, cStyled), leftW))
+		leftLines = append(leftLines, CenterLine(cStyled, leftW))
 
 		barLen := leftW - 10
 		if barLen > 36 {
@@ -591,8 +538,8 @@ func renderZenMode(p ViewParams) string {
 			barLen = 10
 		}
 		seek := renderProgressBar(ratio, barLen)
-		leftLines = append(leftLines, PadToWidth(lipgloss.PlaceHorizontal(leftW, lipgloss.Center, seek), leftW))
-		leftLines = append(leftLines, PadToWidth(lipgloss.PlaceHorizontal(leftW, lipgloss.Center, vStyled), leftW))
+		leftLines = append(leftLines, CenterLine(seek, leftW))
+		leftLines = append(leftLines, CenterLine(vStyled, leftW))
 
 		for len(leftLines) < innerH {
 			leftLines = append(leftLines, PadToWidth("", leftW))
@@ -605,7 +552,7 @@ func renderZenMode(p ViewParams) string {
 		rightLines := renderZenLyrics(p.LyricsLines, p.LyricsCursor, curProgress, rightW, innerH)
 
 		// Space separator instead of vertical dividing line
-		divider := strings.Repeat(" ", gapW)
+		divider := BgPad(gapW)
 		for i := 0; i < innerH; i++ {
 			innerLines = append(innerLines, leftLines[i]+divider+rightLines[i])
 		}
@@ -623,13 +570,7 @@ func renderZenMode(p ViewParams) string {
 				artRows = artRows[:maxArtRows]
 			}
 			for _, row := range artRows {
-				rowW := ansi.StringWidth(row)
-				padLeft := (innerW - rowW) / 2
-				if padLeft < 0 {
-					padLeft = 0
-				}
-				centered := strings.Repeat(" ", padLeft) + row
-				displayedArtRows = append(displayedArtRows, PadToWidth(centered, innerW))
+				displayedArtRows = append(displayedArtRows, CenterLine(row, innerW))
 			}
 		}
 
@@ -647,16 +588,16 @@ func renderZenMode(p ViewParams) string {
 
 		innerLines = append(innerLines, PadToWidth("", innerW))
 		tStyled := StyleBold.Render(TruncateString(trackName, innerW-4))
-		innerLines = append(innerLines, PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, tStyled), innerW))
+		innerLines = append(innerLines, CenterLine(tStyled, innerW))
 
 		aStyled := StyleLavender.Render(TruncateString(artistName, innerW-4))
-		innerLines = append(innerLines, PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, aStyled), innerW))
+		innerLines = append(innerLines, CenterLine(aStyled, innerW))
 
 		innerLines = append(innerLines, PadToWidth("", innerW))
 
 		ctrls := fmt.Sprintf("%s   [ ⏮  %s  ⏭ ]   %s", elapsed, playIcon, total)
 		cStyled := StylePurple.Render(ctrls)
-		innerLines = append(innerLines, PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, cStyled), innerW))
+		innerLines = append(innerLines, CenterLine(cStyled, innerW))
 
 		barLen := 44
 		if barLen > innerW-10 {
@@ -666,8 +607,8 @@ func renderZenMode(p ViewParams) string {
 			barLen = 12
 		}
 		seek := renderProgressBar(ratio, barLen)
-		innerLines = append(innerLines, PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, seek), innerW))
-		innerLines = append(innerLines, PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, vStyled), innerW))
+		innerLines = append(innerLines, CenterLine(seek, innerW))
+		innerLines = append(innerLines, CenterLine(vStyled, innerW))
 
 		for len(innerLines) < innerH {
 			innerLines = append(innerLines, PadToWidth("", innerW))
@@ -679,7 +620,7 @@ func renderZenMode(p ViewParams) string {
 	case ZenViewLyrics:
 		// Top banner: track and artist
 		banner := StyleBold.Render(TruncateString(trackName, innerW/2)) + StyleFaint.Render(" ─ ") + StyleLavender.Render(TruncateString(artistName, innerW/2))
-		topRow := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, banner), innerW)
+		topRow := CenterLine(banner, innerW)
 
 		// Bottom controls, seekbar, and volume (UNDER the lyrics, never on top of lyrics)
 		ctrls := fmt.Sprintf("%s   [ ⏮  %s  ⏭ ]   %s", elapsed, playIcon, total)
@@ -688,9 +629,9 @@ func renderZenMode(p ViewParams) string {
 			barLen = innerW - 10
 		}
 		seek := renderProgressBar(ratio, barLen)
-		rowControls := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, StylePurple.Render(ctrls)), innerW)
-		rowSeek := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, seek), innerW)
-		rowVol := PadToWidth(lipgloss.PlaceHorizontal(innerW, lipgloss.Center, vStyled), innerW)
+		rowControls := CenterLine(StylePurple.Render(ctrls), innerW)
+		rowSeek := CenterLine(seek, innerW)
+		rowVol := CenterLine(vStyled, innerW)
 
 		bottomH := 4 // 1 gap + controls + seek + vol
 		topH := 2    // 1 pad + banner
@@ -740,3 +681,29 @@ func renderZenMode(p ViewParams) string {
 
 	return strings.Join(finalLines, "\n")
 }
+
+func joinHorizontalThemed(views []string, widths []int, height int) string {
+	var splitViews [][]string
+	for i, v := range views {
+		lines := strings.Split(v, "\n")
+		w := widths[i]
+		for len(lines) < height {
+			lines = append(lines, PadToWidth("", w))
+		}
+		if len(lines) > height {
+			lines = lines[:height]
+		}
+		splitViews = append(splitViews, lines)
+	}
+
+	var combined []string
+	for r := 0; r < height; r++ {
+		var row strings.Builder
+		for _, vLines := range splitViews {
+			row.WriteString(vLines[r])
+		}
+		combined = append(combined, row.String())
+	}
+	return strings.Join(combined, "\n")
+}
+
