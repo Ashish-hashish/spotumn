@@ -1,3 +1,4 @@
+// Spotify OAuth 2.0 PKCE authentication flow, local callback listener, and token refresh handling.
 package auth
 
 import (
@@ -80,7 +81,14 @@ func NewAuthService(cfg *config.Config) *AuthService {
 	}
 }
 
-// GenerateRandomBytes creates cryptographically secure random bytes
+func (a *AuthService) RedirectURL() string {
+	return a.oauthCfg.RedirectURL
+}
+
+func (a *AuthService) ClientID() string {
+	return a.oauthCfg.ClientID
+}
+
 func GenerateRandomBytes(n int) ([]byte, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -89,8 +97,7 @@ func GenerateRandomBytes(n int) ([]byte, error) {
 	return b, nil
 }
 
-// generatePKCE generates code_verifier and code_challenge (RFC 7636)
-func generatePKCE() (verifier, challenge string, err error) {
+func GeneratePKCE() (verifier, challenge string, err error) {
 	bytes, err := GenerateRandomBytes(64)
 	if err != nil {
 		return "", "", err
@@ -101,13 +108,11 @@ func generatePKCE() (verifier, challenge string, err error) {
 	return verifier, challenge, nil
 }
 
-// StoredCredentials holds the saved OAuth token and associated client ID
 type StoredCredentials struct {
 	oauth2.Token
 	ClientID string `json:"client_id,omitempty"`
 }
 
-// LoadSavedToken loads the token from credentials.json
 func (a *AuthService) LoadSavedToken() (*oauth2.Token, error) {
 	a.tokenMu.Lock()
 	defer a.tokenMu.Unlock()
@@ -132,7 +137,6 @@ func (a *AuthService) LoadSavedToken() (*oauth2.Token, error) {
 	return &stored.Token, nil
 }
 
-// SaveToken saves token with strict 0600 permissions
 func (a *AuthService) SaveToken(tok *oauth2.Token) error {
 	a.tokenMu.Lock()
 	defer a.tokenMu.Unlock()
@@ -154,7 +158,6 @@ func (a *AuthService) SaveToken(tok *oauth2.Token) error {
 	return os.WriteFile(a.tokenFile, data, 0600)
 }
 
-// GetTokenSource returns a refreshed token source that auto-updates on disk
 func (a *AuthService) GetTokenSource(ctx context.Context) oauth2.TokenSource {
 	a.tokenMu.RLock()
 	current := a.token
@@ -195,8 +198,7 @@ func (s *savingTokenSource) Token() (*oauth2.Token, error) {
 	return tok, nil
 }
 
-// Authorize performs authorization using saved credentials or falls back to browser login
-func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
+func (a *AuthService) Authorize(ctx context.Context, onURL ...func(string)) (*oauth2.Token, error) {
 	if tok, err := a.LoadSavedToken(); err == nil && tok != nil {
 		if tok.Valid() {
 			return tok, nil
@@ -213,12 +215,12 @@ func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
 			}
 		}
 	}
-	return a.AuthorizeNew(ctx)
+	return a.AuthorizeNew(ctx, onURL...)
 }
 
-// AuthorizeNew opens browser for Spotify OAuth authorization
-func (a *AuthService) AuthorizeNew(ctx context.Context) (*oauth2.Token, error) {
-	verifier, challenge, err := generatePKCE()
+func (a *AuthService) AuthorizeNew(ctx context.Context, onURL ...func(string)) (*oauth2.Token, error) {
+	// generate cryptographic pkce challenge and state to prevent auth interception
+	verifier, challenge, err := GeneratePKCE()
 	if err != nil {
 		return nil, fmt.Errorf("failed generating PKCE: %w", err)
 	}
@@ -229,7 +231,6 @@ func (a *AuthService) AuthorizeNew(ctx context.Context) (*oauth2.Token, error) {
 	}
 	state := hex.EncodeToString(stateBytes)
 
-	// Auth URL with PKCE challenge
 	authURL := a.oauthCfg.AuthCodeURL(
 		state,
 		oauth2.AccessTypeOffline,
@@ -237,12 +238,15 @@ func (a *AuthService) AuthorizeNew(ctx context.Context) (*oauth2.Token, error) {
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 	)
 
-	// Channel to receive the auth code or error
+	if len(onURL) > 0 && onURL[0] != nil {
+		onURL[0](authURL)
+	}
+
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 	var once sync.Once
 
-	// Bind strictly to loopback IP (127.0.0.1) to avoid exposing callback on LAN
+	// spin up temporary loopback server to catch spotify's oauth redirect code
 	addr := fmt.Sprintf("127.0.0.1:%d", a.cfg.Port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -257,7 +261,6 @@ func (a *AuthService) AuthorizeNew(ctx context.Context) (*oauth2.Token, error) {
 	}
 
 	callbackHandler := func(w http.ResponseWriter, r *http.Request) {
-		// Ignore stray requests (e.g. /favicon.ico, /apple-touch-icon.png)
 		if r.URL.Path != "/login" && r.URL.Path != "/callback" {
 			http.NotFound(w, r)
 			return
@@ -267,7 +270,6 @@ func (a *AuthService) AuthorizeNew(ctx context.Context) (*oauth2.Token, error) {
 		code := q.Get("code")
 		errStr := q.Get("error")
 
-		// If neither code nor error is present (e.g. prefetch or direct navigation), ignore and keep listening
 		if code == "" && errStr == "" {
 			http.NotFound(w, r)
 			return
@@ -291,7 +293,6 @@ func (a *AuthService) AuthorizeNew(ctx context.Context) (*oauth2.Token, error) {
 			return
 		}
 
-		// Set secure response headers
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -330,10 +331,8 @@ p { color: #a6adc8; font-size: 14px; }
 		_ = server.Serve(listener)
 	}()
 
-	// Open browser or show URL
-	backend.OpenURL(authURL)
+	_ = backend.OpenURL(authURL)
 
-	// Wait for callback or context cancel
 	select {
 	case <-ctx.Done():
 		_ = server.Shutdown(context.Background())
@@ -344,7 +343,6 @@ p { color: #a6adc8; font-size: 14px; }
 	case code := <-codeChan:
 		_ = server.Shutdown(context.Background())
 
-		// Exchange code for token with PKCE verifier
 		tok, err := a.exchangePKCE(ctx, code, verifier)
 		if err != nil {
 			return nil, fmt.Errorf("token exchange failed: %w", err)
@@ -355,7 +353,6 @@ p { color: #a6adc8; font-size: 14px; }
 	}
 }
 
-// exchangePKCE exchanges the auth code with the code_verifier
 func (a *AuthService) exchangePKCE(ctx context.Context, code, verifier string) (*oauth2.Token, error) {
 	v := url.Values{
 		"grant_type":    {"authorization_code"},

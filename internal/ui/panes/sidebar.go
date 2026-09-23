@@ -1,4 +1,5 @@
-package ui
+// Left navigation sidebar - displays user profile, library categories, playlists, and pinned items.
+package panes
 
 import (
 	"fmt"
@@ -7,35 +8,12 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"spotumn/internal/backend"
+	"spotumn/internal/ui/state"
+	"spotumn/internal/ui/theme"
 )
 
-type PlaylistFilter int
-
-const (
-	FilterAll PlaylistFilter = iota
-	FilterSpotify
-	FilterByYou
-	FilterAlbums
-	FilterArtists
-)
-
-func (f PlaylistFilter) String() string {
-	switch f {
-	case FilterSpotify:
-		return "By Spotify"
-	case FilterByYou:
-		return "By You"
-	case FilterAlbums:
-		return "Albums"
-	case FilterArtists:
-		return "Artists"
-	default:
-		return "ALL"
-	}
-}
-
-// RenderNavLines generates the lines for the left navigation pane
-func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, filter PlaylistFilter, selectedIndex int, focused bool, width, height int) []string {
+// render left navigation pane with category headers, pinned items, and active scroll offset
+func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, filter state.PlaylistFilter, selectedIndex int, focused bool, width, height int) []string {
 	if width < 10 {
 		width = 10
 	}
@@ -44,9 +22,9 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 	}
 
 	categoryTitle := "Playlists"
-	if filter == FilterAlbums {
+	if filter == state.FilterAlbums {
 		categoryTitle = "Albums"
-	} else if filter == FilterArtists {
+	} else if filter == state.FilterArtists {
 		categoryTitle = "Artists"
 	}
 
@@ -56,12 +34,12 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 		prefixDot = "● "
 	}
 	titleText := fmt.Sprintf(" %s%s [%s] ", prefixDot, categoryTitle, filterName)
-	title := StylePurple.Render(titleText)
-	hints := StyleFaint.Render(" [f] filter  [*] pin ")
+	title := theme.StylePurple.Render(titleText)
+	hints := theme.StyleFaint.Render(" [f] filter  [*] pin ")
 
 	lines := []string{
 		alignTwoItems(title, hints, width),
-		PadToWidth(StyleFaint.Render(strings.Repeat("─", width)), width),
+		theme.PadToWidth(theme.StyleFaint.Render(strings.Repeat("─", width)), width),
 	}
 
 	availableRows := height - len(lines)
@@ -77,7 +55,7 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 	for i := 0; i < availableRows; i++ {
 		idx := scrollOffset + i
 		if idx >= len(playlists) {
-			lines = append(lines, PadToWidth("", width))
+			lines = append(lines, theme.PadToWidth("", width))
 			continue
 		}
 
@@ -89,7 +67,6 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 			prefix = "❯ "
 		}
 
-		// Bold crisp gold star for pinned playlists
 		starPrefix := ""
 		if pinnedURIs != nil && pinnedURIs[pl.URI] {
 			starPrefix = "★ "
@@ -98,13 +75,13 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 		countStr := ""
 		displayName := pl.Name
 		numPrefix := ""
-		if filter == FilterAlbums {
+		if filter == state.FilterAlbums {
 			numPrefix = fmt.Sprintf("%d. ", idx+1)
 			if pl.OwnerID != "" && width >= 34 {
 				displayName = fmt.Sprintf("%s ─ %s", pl.Name, pl.OwnerID)
 			}
 			countStr = fmt.Sprintf(" (%d)", pl.TrackCount)
-		} else if filter == FilterArtists {
+		} else if filter == state.FilterArtists {
 			numPrefix = fmt.Sprintf("%d. ", idx+1)
 			countStr = ""
 		} else if pl.TrackCount > 0 {
@@ -116,32 +93,32 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 			availNameW = 4
 		}
 
-		truncName := TruncateString(displayName, availNameW)
+		truncName := theme.TruncateString(displayName, availNameW)
 		plainLine := prefix + starPrefix + numPrefix + truncName + countStr
 
 		var lineContent string
 		if isSelected && focused {
-			lineContent = RenderPaddedLine(plainLine, StyleActiveFocusedBlock, width)
+			lineContent = theme.RenderPaddedLine(plainLine, theme.StyleActiveFocusedBlock, width)
 		} else if isSelected {
-			lineContent = RenderPaddedLine(plainLine, StyleActiveUnfocusedBlock, width)
+			lineContent = theme.RenderPaddedLine(plainLine, theme.StyleActiveUnfocusedBlock, width)
 		} else if starPrefix != "" {
-			starStyled := lipgloss.NewStyle().Foreground(CurrentTheme.Gold).Background(CurrentTheme.Surface).Bold(true).Render(prefix + starPrefix)
-			numStyled := StyleFaint.Render(numPrefix)
-			nameStyled := StyleNormal.Render(truncName)
-			cntStyled := StyleFaint.Render(countStr)
-			lineContent = PadToWidth(starStyled+numStyled+nameStyled+cntStyled, width)
+			starStyled := lipgloss.NewStyle().Foreground(theme.CurrentTheme.Gold).Background(theme.CurrentTheme.Surface).Bold(true).Render(prefix + starPrefix)
+			numStyled := theme.StyleFaint.Render(numPrefix)
+			nameStyled := theme.StyleNormal.Render(truncName)
+			cntStyled := theme.StyleFaint.Render(countStr)
+			lineContent = theme.PadToWidth(starStyled+numStyled+nameStyled+cntStyled, width)
 		} else {
-			numStyled := StyleFaint.Render(numPrefix)
-			nameStyled := StyleNormal.Render(truncName)
-			cntStyled := StyleFaint.Render(countStr)
-			lineContent = PadToWidth(prefix+numStyled+nameStyled+cntStyled, width)
+			numStyled := theme.StyleFaint.Render(numPrefix)
+			nameStyled := theme.StyleNormal.Render(truncName)
+			cntStyled := theme.StyleFaint.Render(countStr)
+			lineContent = theme.PadToWidth(prefix+numStyled+nameStyled+cntStyled, width)
 		}
 
 		lines = append(lines, lineContent)
 	}
 
 	for len(lines) < height {
-		lines = append(lines, PadToWidth("", width))
+		lines = append(lines, theme.PadToWidth("", width))
 	}
 	if len(lines) > height {
 		lines = lines[:height]
@@ -150,8 +127,7 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 	return lines
 }
 
-// RenderNav renders the left sidebar inside a border that highlights when focused
-func RenderNav(playlists []backend.Playlist, pinnedURIs map[string]bool, filter PlaylistFilter, selectedIndex int, focused bool, width, height int) string {
+func RenderNav(playlists []backend.Playlist, pinnedURIs map[string]bool, filter state.PlaylistFilter, selectedIndex int, focused bool, width, height int) string {
 	contentW := width - 2
 	if contentW < 10 {
 		contentW = 10
@@ -162,7 +138,7 @@ func RenderNav(playlists []backend.Playlist, pinnedURIs map[string]bool, filter 
 	}
 
 	lines := RenderNavLines(playlists, pinnedURIs, filter, selectedIndex, focused, contentW, contentH)
-	boxStyle := PanelBox(focused, width, height)
+	boxStyle := theme.PanelBox(focused, width, height)
 	return boxStyle.Render(strings.Join(lines, "\n"))
 }
 
@@ -173,5 +149,5 @@ func alignTwoItems(left, right string, totalW int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	return PadToWidth(left+BgPad(gap)+right, totalW)
+	return theme.PadToWidth(left+theme.BgPad(gap)+right, totalW)
 }

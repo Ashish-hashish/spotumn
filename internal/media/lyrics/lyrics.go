@@ -1,3 +1,4 @@
+// Synced and plain lyrics provider - fetches and parses time-synchronized lyrics from LRCLIB.
 package lyrics
 
 import (
@@ -37,15 +38,13 @@ type lrclibItem struct {
 	PlainLyrics  string `json:"plainLyrics"`
 }
 
-// FetchSyncedLyrics fetches and parses synced lyrics from LRCLib with search fallback.
-// Returns lines, whether the lyrics are timestamp-synced, and any error.
+// query lrclib with exact duration first, falling back to fuzzy text search
 func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec int) ([]Line, bool, error) {
 	trackName = cleanTrackName(trackName)
 	if strings.TrimSpace(trackName) == "" {
 		return nil, false, nil
 	}
 
-	// 1. Try exact match lookup first
 	u := fmt.Sprintf("https://lrclib.net/api/get?track_name=%s&artist_name=%s&duration=%d",
 		url.QueryEscape(trackName),
 		url.QueryEscape(artistName),
@@ -56,7 +55,6 @@ func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec i
 		return lines, synced, nil
 	}
 
-	// 2. Fallback to flexible search
 	searchURL := fmt.Sprintf("https://lrclib.net/api/search?track_name=%s&artist_name=%s",
 		url.QueryEscape(trackName),
 		url.QueryEscape(artistName),
@@ -66,7 +64,6 @@ func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec i
 		return lines, synced, nil
 	}
 
-	// 3. Fallback to query by track name only if artist name has multiple/featured artists
 	generalSearchURL := fmt.Sprintf("https://lrclib.net/api/search?q=%s",
 		url.QueryEscape(trackName+" "+artistName),
 	)
@@ -101,7 +98,7 @@ func (p *Provider) fetchFromURL(targetURL string, isArray bool) ([]Line, bool) {
 		}
 		for _, item := range items {
 			if item.SyncedLyrics != "" {
-				return parseLRC(item.SyncedLyrics), true
+				return ParseLRC(item.SyncedLyrics), true
 			}
 		}
 		for _, item := range items {
@@ -121,7 +118,7 @@ func (p *Provider) fetchFromURL(targetURL string, isArray bool) ([]Line, bool) {
 
 func extractItemLyrics(item lrclibItem) ([]Line, bool) {
 	if item.SyncedLyrics != "" {
-		return parseLRC(item.SyncedLyrics), true
+		return ParseLRC(item.SyncedLyrics), true
 	}
 	if item.PlainLyrics != "" {
 		return parsePlain(item.PlainLyrics), false
@@ -129,8 +126,8 @@ func extractItemLyrics(item lrclibItem) ([]Line, bool) {
 	return nil, false
 }
 
+// strip suffix metadata like remasters or live tags so lyrics match cleanly
 func cleanTrackName(name string) string {
-	// Strip " - Remastered...", " (feat. ...)" for better lyrics search matching
 	if idx := strings.Index(name, " - "); idx > 0 {
 		name = name[:idx]
 	}
@@ -148,7 +145,8 @@ func parsePlain(plain string) []Line {
 	return lines
 }
 
-func parseLRC(raw string) []Line {
+// parse standard lrc timestamps into millisecond offsets and sort chronologically
+func ParseLRC(raw string) []Line {
 	var lines []Line
 	for _, rawLine := range strings.Split(raw, "\n") {
 		rawLine = strings.TrimSpace(rawLine)
@@ -178,7 +176,6 @@ func parseLRC(raw string) []Line {
 	return lines
 }
 
-// FindActiveIndex returns index of currently playing lyric line
 func FindActiveIndex(lines []Line, progressMs int) int {
 	if len(lines) == 0 {
 		return -1

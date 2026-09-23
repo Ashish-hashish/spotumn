@@ -1,3 +1,4 @@
+// User preferences and configuration management - loads and saves spotumn.json with default fallbacks.
 package config
 
 import (
@@ -12,7 +13,6 @@ const (
 	SpotifyClientID          = "d420a117a32841c2b3474932e49fb54b"
 	SpotifyLibrespotClientID = "65b708073fc0480ea92a077233ca87bd"
 )
-
 
 type Config struct {
 	Port               int    `yaml:"port"`
@@ -79,6 +79,7 @@ func Get() *Config {
 func Load() (*Config, error) {
 	cfg := defaults()
 
+	// load config from disk or write default template if not found
 	configPath := filepath.Join(GetDir(), "config.yml")
 	data, err := os.ReadFile(configPath)
 	if err != nil && os.IsNotExist(err) {
@@ -87,6 +88,7 @@ func Load() (*Config, error) {
 		_ = yaml.Unmarshal(data, cfg)
 	}
 
+	// environment variables take precedence over config file
 	if envURI := strings.TrimSpace(os.Getenv("SPOTUMN_REDIRECT_URI")); envURI != "" {
 		cfg.RedirectURI = envURI
 	}
@@ -94,6 +96,7 @@ func Load() (*Config, error) {
 		cfg.ArtRenderer = strings.ToLower(envArt)
 	}
 
+	// sanitize fields and fallback to safe defaults
 	cfg.RedirectURI = strings.TrimSpace(cfg.RedirectURI)
 	if cfg.Port <= 0 {
 		cfg.Port = DefaultPort
@@ -105,7 +108,8 @@ func Load() (*Config, error) {
 	if cfg.Theme == "" {
 		cfg.Theme = "spotify"
 	}
-	if cfg.AppearanceMode == "" {
+	cfg.AppearanceMode = strings.ToLower(strings.TrimSpace(cfg.AppearanceMode))
+	if cfg.AppearanceMode != "light" && cfg.AppearanceMode != "dark" {
 		cfg.AppearanceMode = "dark"
 	}
 	if cfg.AudioBackend == "" {

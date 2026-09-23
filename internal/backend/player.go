@@ -1,3 +1,4 @@
+// Embedded Librespot player daemon - manages Spotify Connect playback, audio backends, and local state.
 package backend
 
 import (
@@ -23,20 +24,24 @@ import (
 	"github.com/devgianlu/go-librespot/daemon"
 )
 
-type fileStateStore struct {
+type FileStateStore struct {
 	path             string
 	mu               sync.Mutex
 	credentialsSaved chan struct{}
 }
 
-func newFileStateStore(path string) *fileStateStore {
-	return &fileStateStore{
+func NewFileStateStore(path string) *FileStateStore {
+	return &FileStateStore{
 		path:             path,
 		credentialsSaved: make(chan struct{}, 1),
 	}
 }
 
-func (s *fileStateStore) Load() (*librespot.AppState, error) {
+func (s *FileStateStore) CredentialsSaved() <-chan struct{} {
+	return s.credentialsSaved
+}
+
+func (s *FileStateStore) Load() (*librespot.AppState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -54,7 +59,7 @@ func (s *fileStateStore) Load() (*librespot.AppState, error) {
 	return state, nil
 }
 
-func (s *fileStateStore) Save(state *librespot.AppState) error {
+func (s *FileStateStore) Save(state *librespot.AppState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	err := s.saveLocked(state)
@@ -67,7 +72,7 @@ func (s *fileStateStore) Save(state *librespot.AppState) error {
 	return err
 }
 
-func (s *fileStateStore) saveLocked(state *librespot.AppState) error {
+func (s *FileStateStore) saveLocked(state *librespot.AppState) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
@@ -85,8 +90,7 @@ func generateDeviceID() string {
 	return hex.EncodeToString(b)
 }
 
-// eventBridge connects go-librespot events to the TUI
-type eventBridge struct {
+type EventBridge struct {
 	events    chan *daemon.ApiEvent
 	requests  chan daemon.ApiRequest
 	authCodes chan *daemon.ApiDeviceAuth
@@ -94,15 +98,27 @@ type eventBridge struct {
 	closed    bool
 }
 
-func newEventBridge() *eventBridge {
-	return &eventBridge{
+func NewEventBridge() *EventBridge {
+	return &EventBridge{
 		events:    make(chan *daemon.ApiEvent, 32),
 		requests:  make(chan daemon.ApiRequest, 16),
 		authCodes: make(chan *daemon.ApiDeviceAuth, 2),
 	}
 }
 
-func (b *eventBridge) Emit(ev *daemon.ApiEvent) {
+func (b *EventBridge) AuthCodes() <-chan *daemon.ApiDeviceAuth {
+	return b.authCodes
+}
+
+func (b *EventBridge) Requests() <-chan daemon.ApiRequest {
+	return b.requests
+}
+
+func (b *EventBridge) Events() <-chan *daemon.ApiEvent {
+	return b.events
+}
+
+func (b *EventBridge) Emit(ev *daemon.ApiEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -111,7 +127,6 @@ func (b *eventBridge) Emit(ev *daemon.ApiEvent) {
 	select {
 	case b.events <- ev:
 	default:
-		// drop oldest to prevent blocking
 		select {
 		case <-b.events:
 		default:
@@ -120,9 +135,9 @@ func (b *eventBridge) Emit(ev *daemon.ApiEvent) {
 	}
 }
 
-func (b *eventBridge) Receive() <-chan daemon.ApiRequest { return b.requests }
+func (b *EventBridge) Receive() <-chan daemon.ApiRequest { return b.requests }
 
-func (b *eventBridge) SetAuthCode(auth *daemon.ApiDeviceAuth) {
+func (b *EventBridge) SetAuthCode(auth *daemon.ApiDeviceAuth) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -134,12 +149,12 @@ func (b *eventBridge) SetAuthCode(auth *daemon.ApiDeviceAuth) {
 		default:
 		}
 		if auth.Url != "" {
-			OpenURL(auth.Url)
+			_ = OpenURL(auth.Url)
 		}
 	}
 }
 
-func (b *eventBridge) Close() error {
+func (b *EventBridge) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.closed {
@@ -181,18 +196,31 @@ func resolveAudioBackend(preferred string) string {
 type Daemon struct {
 	app        *daemon.App
 	cancel     context.CancelFunc
-	bridge     *eventBridge
-	stateStore *fileStateStore
+	bridge     *EventBridge
+	stateStore *FileStateStore
 	deviceId   string
 	running    bool
 	mu         sync.Mutex
+}
+
+func NewDaemonWithStore(store *FileStateStore) *Daemon {
+	return &Daemon{
+		stateStore: store,
+	}
+}
+
+func NewDaemonWithBridge(bridge *EventBridge, running bool) *Daemon {
+	return &Daemon{
+		bridge:  bridge,
+		running: running,
+	}
 }
 
 func NewDaemon() *Daemon {
 	cacheDir := filepath.Join(config.GetCacheDir(), "librespot")
 	_ = os.MkdirAll(cacheDir, 0700)
 
-	store := newFileStateStore(filepath.Join(cacheDir, "state.json"))
+	store := NewFileStateStore(filepath.Join(cacheDir, "state.json"))
 	state, _ := store.Load()
 
 	if len(state.Credentials.Data) == 0 {
@@ -283,6 +311,7 @@ func (d *Daemon) Start(username string, token ...string) error {
 		Type: "device_auth",
 	}
 
+	// configure embedded librespot daemon with local caching, crossfade, and zeroconf
 	dCfg := &daemon.Config{
 		DeviceId:              d.deviceId,
 		DeviceName:            "spotumn",
@@ -305,7 +334,7 @@ func (d *Daemon) Start(username string, token ...string) error {
 		Credentials: credsCfg,
 	}
 
-	bridge := newEventBridge()
+	bridge := NewEventBridge()
 
 	app, err := daemon.New(&daemon.Options{
 		Logger:     &librespot.NullLogger{},
@@ -463,7 +492,8 @@ func (d *Daemon) StopPlayback() error {
 	return d.SendCommand(daemon.ApiRequestTypeStop, nil)
 }
 
-func OpenURL(targetURL string) {
+// open url in default system browser
+func OpenURL(targetURL string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":
@@ -472,8 +502,45 @@ func OpenURL(targetURL string) {
 		cmd = exec.Command("open", targetURL)
 	case "windows":
 		cmd = exec.Command("cmd", "/c", "start", targetURL)
+	default:
+		return errors.New("unsupported platform")
 	}
 	if cmd != nil {
-		_ = cmd.Start()
+		return cmd.Start()
 	}
+	return errors.New("command not initialized")
+}
+
+func CopyToClipboard(text string) error {
+	// send osc 52 terminal clipboard escape sequence
+	b64 := base64.StdEncoding.EncodeToString([]byte(text))
+	_, _ = os.Stdout.WriteString(fmt.Sprintf("\x1b]52;c;%s\x07", b64))
+
+	// try native system clipboard utilities if present
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy")
+		} else if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--input")
+		}
+	case "darwin":
+		if _, err := exec.LookPath("pbcopy"); err == nil {
+			cmd = exec.Command("pbcopy")
+		}
+	case "windows":
+		if _, err := exec.LookPath("clip.exe"); err == nil {
+			cmd = exec.Command("clip.exe")
+		}
+	}
+
+	if cmd != nil {
+		cmd.Stdin = strings.NewReader(text)
+		_ = cmd.Run()
+	}
+
+	return nil
 }

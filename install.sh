@@ -1,42 +1,35 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# spotumn installer
-# Compiles spotumn from source and installs the binary.
-# Offers interactive choice between Full (Chafa + ANSI) and Minimal (ANSI-only).
-# ==============================================================================
-
+# Installation script - builds Spotumn from source and sets up binaries, desktop entries, and dependencies.
 set -euo pipefail
 
-# Adaptive ANSI color codes (High contrast & readable in both light and dark terminal modes)
 CLR_RESET="\033[0m"
 CLR_BOLD="\033[1m"
-CLR_LAVENDER="\033[1;34m"
-CLR_GREEN="\033[1;32m"
-CLR_PEACH="\033[1;33m"
-CLR_RED="\033[1;31m"
-CLR_SUBTEXT="\033[2m"
+CLR_BLUE="\033[34m"
+CLR_GREEN="\033[32m"
+CLR_YELLOW="\033[33m"
+CLR_RED="\033[31m"
+CLR_DIM="\033[2m"
 
 log_info() {
-    echo -e "${CLR_LAVENDER}${CLR_BOLD}==>${CLR_RESET} ${CLR_BOLD}$1${CLR_RESET}"
+    echo -e "${CLR_BLUE}==>${CLR_RESET} ${CLR_BOLD}$1${CLR_RESET}"
 }
 
 log_success() {
-    echo -e "${CLR_GREEN}${CLR_BOLD}✔${CLR_RESET} $1"
+    echo -e "${CLR_GREEN}✔${CLR_RESET} $1"
 }
 
 log_warn() {
-    echo -e "${CLR_PEACH}${CLR_BOLD}▲${CLR_RESET} $1"
+    echo -e "${CLR_YELLOW}▲${CLR_RESET} $1"
 }
 
 log_error() {
-    echo -e "${CLR_RED}${CLR_BOLD}✖${CLR_RESET} $1" >&2
+    echo -e "${CLR_RED}✖${CLR_RESET} $1" >&2
 }
 
-# Determine script directory (root of repository)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo -e "${CLR_LAVENDER}${CLR_BOLD}"
+echo -e "${CLR_BLUE}${CLR_BOLD}"
 cat << 'EOF'
   ___ _ __   ___ | |_ _   _ _ __ ___  _ __  
  / __| '_ \ / _ \| __| | | | '_ ` _ \| '_ \ 
@@ -44,9 +37,8 @@ cat << 'EOF'
  |___/ .__/ \___/ \__|\__,_|_| |_| |_|_| |_|
      |_|                                    
 EOF
-echo -e "${CLR_RESET}${CLR_SUBTEXT}   Spotify TUI Client (Compiling from Source)${CLR_RESET}\n"
+echo -e "${CLR_RESET}${CLR_DIM}   Spotify TUI Client (Compiling from Source)${CLR_RESET}\n"
 
-# Parse command line options
 BUILD_EDITION=""
 NON_INTERACTIVE=false
 
@@ -68,9 +60,9 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: ./install.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --full, -1         Build Full edition (Chafa graphics + ANSI fallback)"
-            echo "  --minimal, -2      Build Minimal edition (Pure ANSI only, zero dependencies)"
-            echo "  -y, --yes          Non-interactive mode (defaults to Full edition)"
+            echo "  --full, -1         Full edition (Chafa graphics + ANSI fallback)"
+            echo "  --minimal, -2      Minimal edition (ANSI only, zero external tools)"
+            echo "  -y, --yes          Non-interactive mode (defaults to full)"
             echo "  -h, --help         Show this help message"
             exit 0
             ;;
@@ -82,19 +74,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 1. Interactive edition selection if not specified via CLI
 if [ -z "$BUILD_EDITION" ]; then
     if [ -t 0 ] && [ "$NON_INTERACTIVE" = false ]; then
-        echo -e "${CLR_BOLD}Choose build edition:${CLR_RESET}"
-        echo -e "  ${CLR_LAVENDER}${CLR_BOLD}1)${CLR_RESET} ${CLR_BOLD}Full (Chafa + ANSI)${CLR_RESET}  ${CLR_SUBTEXT}[Default]${CLR_RESET}"
-        echo -e "     • Uses Chafa for high-res artwork & sextants"
-        echo -e "     • Automatically falls back to pure ANSI half-blocks if chafa is missing"
+        echo -e "${CLR_BOLD}Select edition:${CLR_RESET}"
+        echo -e "  ${CLR_BLUE}1)${CLR_RESET} ${CLR_BOLD}Full${CLR_RESET}    ${CLR_DIM}(Chafa artwork + ANSI fallback - Default)${CLR_RESET}"
+        echo -e "  ${CLR_BLUE}2)${CLR_RESET} ${CLR_BOLD}Minimal${CLR_RESET} ${CLR_DIM}(Pure ANSI half-blocks, standalone)${CLR_RESET}"
         echo ""
-        echo -e "  ${CLR_LAVENDER}${CLR_BOLD}2)${CLR_RESET} ${CLR_BOLD}Minimal (ANSI only)${CLR_RESET}"
-        echo -e "     • Pure Go TrueColor half-blocks (▀) exclusively"
-        echo -e "     • 100% self-contained, zero external image tool dependencies"
-        echo ""
-        read -r -p "Select edition [1/2] (default: 1): " choice
+        read -r -p "Enter choice [1/2] (default: 1): " choice
         case "$choice" in
             2|"minimal"|"Minimal")
                 BUILD_EDITION="minimal"
@@ -108,32 +94,22 @@ if [ -z "$BUILD_EDITION" ]; then
     fi
 fi
 
-echo ""
-log_info "Selected edition: ${CLR_BOLD}${BUILD_EDITION^^}${CLR_RESET}"
-
-# 2. Verify Go toolchain
-log_info "Checking prerequisites..."
 if ! command -v go >/dev/null 2>&1; then
-    log_error "Go compiler ('go') is not installed or not in PATH."
-    log_error "Please install Go (>= 1.20) from https://go.dev/dl/ and try again."
+    log_error "Go compiler not found. Please install Go (>= 1.20)."
     exit 1
 fi
 
 GO_VERSION=$(go version | awk '{print $3}')
-log_success "Found Go compiler: ${GO_VERSION}"
+log_success "Found Go compiler (${GO_VERSION})"
 
-# Check chafa if Full edition selected
 if [ "$BUILD_EDITION" = "full" ]; then
     if command -v chafa >/dev/null 2>&1; then
         log_success "Found chafa image renderer"
     else
-        log_warn "chafa not found on system. (spotumn will automatically use ANSI half-blocks until chafa is installed)"
+        log_warn "chafa not found (ANSI half-blocks will be used automatically)"
     fi
 fi
 
-log_success "Embedded native Spotify Connect player engine enabled"
-
-# 3. Determine target install directory
 PREFIX="${PREFIX:-}"
 if [ -n "$PREFIX" ]; then
     INSTALL_DIR="${PREFIX}/bin"
@@ -147,80 +123,59 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 
-# 4. Build from source
 BUILD_TMP="$(mktemp -d -t spotumn-build-XXXXXX)"
 cleanup() {
     rm -rf "$BUILD_TMP"
 }
 trap cleanup EXIT
 
-log_info "Downloading Go dependencies..."
-go mod download
-
+log_info "Compiling spotumn (${BUILD_EDITION})..."
 TARGET_BIN="${BUILD_TMP}/spotumn"
 if [ "$BUILD_EDITION" = "minimal" ]; then
-    log_info "Compiling spotumn (Minimal: ANSI only)..."
     go build -tags minimal -trimpath -ldflags="-s -w" -o "$TARGET_BIN" ./cmd/spotumn
 else
-    log_info "Compiling spotumn (Full: Chafa + ANSI)..."
     go build -trimpath -ldflags="-s -w" -o "$TARGET_BIN" ./cmd/spotumn
 fi
-log_success "Compilation successful"
+log_success "Compilation completed"
 
-# 5. Install binary
-log_info "Installing spotumn to ${INSTALL_DIR}..."
+log_info "Installing binary to ${INSTALL_DIR}..."
 install -m 0755 "$TARGET_BIN" "${INSTALL_DIR}/spotumn"
-log_success "Installed binary: ${INSTALL_DIR}/spotumn"
+log_success "Installed binary at ${INSTALL_DIR}/spotumn"
 
-# 6. Initialize config directory with secure permissions
 CONFIG_DIR="${HOME}/.config/spotumn"
 mkdir -p "$CONFIG_DIR"
 chmod 0700 "$CONFIG_DIR"
 
 CONFIG_FILE="${CONFIG_DIR}/config.yml"
-if [ ! -f "$CONFIG_FILE" ]; then
+if [ -f "$CONFIG_FILE" ]; then
+    log_success "Existing configuration preserved at ${CONFIG_FILE}"
+else
     cat > "$CONFIG_FILE" << 'EOF'
-# spotumn configuration
-# port: 8989
-# art_renderer: auto # auto, ansi
-# theme: spotify
+port: 8989
+art_renderer: auto
+theme: spotify
 EOF
     chmod 0600 "$CONFIG_FILE"
-    log_success "Created config template at ${CONFIG_FILE} (mode 0600)"
+    log_success "Created configuration template at ${CONFIG_FILE}"
 fi
 
-# 7. Install themes and example theme
 THEMES_DIR="${CONFIG_DIR}/themes"
 mkdir -p "$THEMES_DIR"
 chmod 0700 "$THEMES_DIR"
 
 if [ -d "${SCRIPT_DIR}/themes" ]; then
-    cp -n "${SCRIPT_DIR}/themes"/*.json "$THEMES_DIR"/ 2>/dev/null || cp "${SCRIPT_DIR}/themes"/*.json "$THEMES_DIR"/
-    cp "${SCRIPT_DIR}/themes/example_theme.txt" "$THEMES_DIR"/ 2>/dev/null || true
+    cp -n "${SCRIPT_DIR}/themes"/*.json "$THEMES_DIR"/ 2>/dev/null || true
+    cp -n "${SCRIPT_DIR}/themes/example_theme.txt" "$THEMES_DIR"/ 2>/dev/null || true
     chmod 0600 "$THEMES_DIR"/* 2>/dev/null || true
-    log_success "Installed preset themes and example to ${THEMES_DIR}"
+    log_success "Themes verified at ${THEMES_DIR}"
 fi
 
 echo ""
-echo -e "${CLR_GREEN}${CLR_BOLD}Installation Complete! (${BUILD_EDITION^^} edition)${CLR_RESET}"
-echo -e "${CLR_SUBTEXT}──────────────────────────────────────────────────────────────────${CLR_RESET}"
+echo -e "${CLR_GREEN}${CLR_BOLD}Spotumn successfully installed!${CLR_RESET}"
 
-# Verify PATH
 if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
-    log_warn "${INSTALL_DIR} is not currently in your \$PATH."
-    echo -e "  Add it to your shell configuration (e.g. ~/.bashrc or ~/.zshrc):"
-    echo -e "    ${CLR_LAVENDER}export PATH=\"${INSTALL_DIR}:\$PATH\"${CLR_RESET}\n"
+    log_warn "${INSTALL_DIR} is not in your \$PATH."
+    echo -e "  Add to your shell configuration: ${CLR_BLUE}export PATH=\"${INSTALL_DIR}:\$PATH\"${CLR_RESET}"
 fi
 
-echo -e "Ready to use!"
-echo -e "  • Works out of the box with public Spotify Connect client ID"
-echo -e "  • Launch ${CLR_LAVENDER}spotumn${CLR_RESET} to start listening!"
-echo ""
-echo -e "${CLR_BOLD}Custom Colorscheme Tip:${CLR_RESET}"
-echo -e "  Spotumn includes a multi-theme JSON engine supporting both dark & light palettes."
-echo -e "  • Presets: ${CLR_LAVENDER}spotify, catppuccin, dracula, gruvbox, monochrome, tokyonight${CLR_RESET}"
-echo -e "  • Press ${CLR_BOLD}\`${CLR_RESET} (backtick) inside spotumn to open ${CLR_BOLD}Settings${CLR_RESET} and cycle themes live."
-echo -e "  • To create your own theme, see ${CLR_LAVENDER}~/.config/spotumn/themes/example_theme.txt${CLR_RESET}:"
-echo -e "      ${CLR_SUBTEXT}cp ~/.config/spotumn/themes/example_theme.txt ~/.config/spotumn/themes/custom.json${CLR_RESET}"
-echo -e "    Edit the colors, and it will be validated and available in Settings automatically."
-echo ""
+echo -e "Run ${CLR_BLUE}${CLR_BOLD}spotumn${CLR_RESET} to start.\n"

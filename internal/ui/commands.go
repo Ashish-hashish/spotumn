@@ -1,3 +1,4 @@
+// Async Bubble Tea commands - handles background Spotify API calls, lyric queries, and art downloads.
 package ui
 
 import (
@@ -6,10 +7,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/oauth2"
 	"spotumn/internal/auth"
 	"spotumn/internal/backend"
 	"spotumn/internal/config"
-	"golang.org/x/oauth2"
 )
 
 func (m *AppModel) doTick() tea.Cmd {
@@ -283,7 +284,6 @@ func (m *AppModel) getZenArtGeometry() (row, col, w, h int) {
 		return row, col, targetW, targetH
 	}
 
-	// ZenViewArt
 	maxW := innerW - 8
 	if maxW < 8 {
 		return 0, 0, 0, 0
@@ -337,4 +337,3 @@ func (m *AppModel) fetchRelatedAlbumsCmd(artistID, plURI, plID, plName string) t
 		}
 	}
 }
-

@@ -1,3 +1,4 @@
+// Main Bubble Tea AppModel - handles top-level state orchestration, subscriptions, and layout flow.
 package ui
 
 import (
@@ -5,11 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"spotumn/internal/art"
 	"spotumn/internal/auth"
 	"spotumn/internal/backend"
 	"spotumn/internal/config"
-	"spotumn/internal/lyrics"
+	"spotumn/internal/media/art"
+	"spotumn/internal/media/lyrics"
+	"spotumn/internal/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/devgianlu/go-librespot/daemon"
@@ -29,18 +31,19 @@ type AppModel struct {
 	focused    FocusedPane
 	currentTab CenterTab
 
-	showLeftSidebar  bool
-	showRightSidebar bool
-	zenMode          bool
-	zenView          ZenViewMode
-	showHelp         bool
-	helpIndex        int
-	helpEditing      bool
-	keyManager       *KeyManager
-	showSettings     bool
-	settingsState    SettingsState
-	showDevices      bool
-	deviceScanning   bool
+	showLeftSidebar    bool
+	showRightSidebar   bool
+	autoShrinkSidebars bool
+	zenMode            bool
+	zenView            ZenViewMode
+	showHelp           bool
+	helpIndex          int
+	helpEditing        bool
+	keyManager         *KeyManager
+	showSettings       bool
+	settingsState      SettingsState
+	showDevices        bool
+	deviceScanning     bool
 
 	devices     []spotify.PlayerDevice
 	deviceIndex int
@@ -133,27 +136,29 @@ func NewAppModel(client *backend.Client, daemon *backend.Daemon, cfg ...*config.
 	pinnedOrder, pinnedURIs := loadPinned()
 
 	m := &AppModel{
-		client:           client,
-		daemon:           daemon,
-		artRen:           art.NewRenderer(artMode),
-		lyrProv:          lyrics.NewProvider(),
-		width:            100,
-		height:           30,
-		focused:          PaneCenter,
-		currentTab:       TabTracks,
-		showLeftSidebar:  true,
-		showRightSidebar: true,
-		navIndex:         0,
-		centerIndex:      0,
-		queueIndex:       0,
-		lyricsCursor:     0,
-		pinnedURIs:       pinnedURIs,
-		pinnedOrder:      pinnedOrder,
-		playlistFilter:   FilterAll,
-		username:         "",
-		keyManager:       NewKeyManager(),
+		client:             client,
+		daemon:             daemon,
+		artRen:             art.NewRenderer(artMode),
+		lyrProv:            lyrics.NewProvider(),
+		width:              100,
+		height:             30,
+		focused:            PaneCenter,
+		currentTab:         TabTracks,
+		showLeftSidebar:    true,
+		showRightSidebar:   true,
+		autoShrinkSidebars: activeCfg.AutoShrinkSidebars,
+		navIndex:           0,
+		centerIndex:        0,
+		queueIndex:         0,
+		lyricsCursor:       0,
+		pinnedURIs:         pinnedURIs,
+		pinnedOrder:        pinnedOrder,
+		playlistFilter:     FilterAll,
+		username:           "",
+		keyManager:         NewKeyManager(),
 	}
 
+	// restore cached playback state so UI isn't blank while initial status polls
 	lastState := client.LoadLastState()
 	if lastState != nil {
 		lastState.Playing = false
@@ -357,13 +362,27 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlaybackMsg:
 		if msg != nil {
-			// If local Spotumn player is active and has a track, do not let stale cloud polling overwrite
+
+			localID := m.client.LocalDeviceID()
+			isRemote := msg.DeviceID != "" && msg.DeviceID != localID && !strings.EqualFold(msg.DeviceName, "spotumn")
+			if isRemote && msg.Playing {
+				m.client.SetSessionState(backend.StateRemoteActive)
+				m.playback = msg
+				m.client.SaveLastState(msg)
+				return m, nil
+			}
+
 			if m.isLocalActive() && m.playback != nil && m.playback.CurrentTrack != nil {
 				if msg.CurrentTrack != nil && msg.CurrentTrack.URI == m.playback.CurrentTrack.URI {
 					m.playback.Shuffle = msg.Shuffle
 					m.playback.Repeat = msg.Repeat
 					if msg.Volume > 0 {
 						m.playback.Volume = msg.Volume
+					}
+
+					if !msg.Playing && time.Since(m.lastActionTime) > 1500*time.Millisecond {
+						m.playback.Playing = false
+						m.client.SaveLastState(m.playback)
 					}
 				}
 				return m, nil
@@ -588,7 +607,7 @@ func (m *AppModel) View() tea.View {
 		CurrentTab:         m.currentTab,
 		ShowLeftSidebar:    m.showLeftSidebar,
 		ShowRightSidebar:   m.showRightSidebar,
-		AutoShrinkSidebars: config.Get().AutoShrinkSidebars,
+		AutoShrinkSidebars: m.autoShrinkSidebars,
 		ZenMode:            m.zenMode,
 		ZenView:            m.zenView,
 		ShowHelp:           m.showHelp,
@@ -627,7 +646,7 @@ func (m *AppModel) View() tea.View {
 	v := tea.NewView(rendered)
 	v.AltScreen = true
 	v.WindowTitle = "spotumn"
-	v.BackgroundColor = CurrentTheme.Surface
+	v.BackgroundColor = theme.CurrentTheme.Surface
 	return v
 }
 

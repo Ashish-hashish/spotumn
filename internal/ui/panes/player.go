@@ -1,4 +1,5 @@
-package ui
+// Bottom playback bar - displays track info, artist, progress bar, time counters, volume, and player state.
+package panes
 
 import (
 	"fmt"
@@ -7,9 +8,10 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"spotumn/internal/backend"
+	"spotumn/internal/ui/theme"
 )
 
-// RenderPlayerLines generates the 3 content rows for the bottom player
+// render bottom player bar with track info, progress bar, shuffle/repeat indicators, and volume
 func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []string {
 	if width < 30 {
 		width = 30
@@ -42,49 +44,47 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 
 	var lines []string
 
-	// Row 1: Track Info (Left) | Controls & Modes (Center) | Volume Slider & Device (Right)
 	leftText := " ♫ " + trackName
 	if artistName != "" {
 		leftText += " - " + artistName
 	}
-	leftStyled := StyleBold.Render(TruncateString(leftText, width/3))
+	leftStyled := theme.StyleBold.Render(theme.TruncateString(leftText, width/3))
 
-	playIcon := StyleMint.Render("▶")
+	playIcon := theme.StyleMint.Render("▶")
 	if isPlaying {
-		playIcon = StyleMint.Render("❚❚")
+		playIcon = theme.StyleMint.Render("❚❚")
 	}
 
 	var shuffIcon string
 	if shuffle {
-		shuffIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("󰒝")
+		shuffIcon = lipgloss.NewStyle().Foreground(theme.CurrentTheme.Tertiary).Background(theme.CurrentTheme.Surface).Bold(true).Render("󰒝")
 	} else {
-		shuffIcon = StyleFaint.Render("󰒞")
+		shuffIcon = theme.StyleFaint.Render("󰒞")
 	}
 
 	var repIcon string
 	switch repeat {
 	case "track":
-		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("󰑘")
+		repIcon = lipgloss.NewStyle().Foreground(theme.CurrentTheme.Tertiary).Background(theme.CurrentTheme.Surface).Bold(true).Render("󰑘")
 	case "context":
-		repIcon = lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("󰑖")
+		repIcon = lipgloss.NewStyle().Foreground(theme.CurrentTheme.Tertiary).Background(theme.CurrentTheme.Surface).Bold(true).Render("󰑖")
 	default:
-		repIcon = StyleFaint.Render("󰑗")
+		repIcon = theme.StyleFaint.Render("󰑗")
 	}
 
-	prevIcon := StylePurple.Render("⏮")
-	nextIcon := StylePurple.Render("⏭")
-	ctrlsStyled := shuffIcon + BgPad(3) + prevIcon + BgPad(3) + playIcon + BgPad(3) + nextIcon + BgPad(3) + repIcon
+	prevIcon := theme.StylePurple.Render("⏮")
+	nextIcon := theme.StylePurple.Render("⏭")
+	ctrlsStyled := shuffIcon + theme.BgPad(3) + prevIcon + theme.BgPad(3) + playIcon + theme.BgPad(3) + nextIcon + theme.BgPad(3) + repIcon
 
 	volBar := RenderMiniSlider(volume, 8)
-	volPrefix := StyleFaint.Render("Vol: [")
-	volSuffix := StyleFaint.Render(fmt.Sprintf("] %2d%% ", volume))
+	volPrefix := theme.StyleFaint.Render("Vol: [")
+	volSuffix := theme.StyleFaint.Render(fmt.Sprintf("] %2d%% ", volume))
 	rightStyled := volPrefix + volBar + volSuffix
 
 	lines = append(lines, alignRow(leftStyled, ctrlsStyled, rightStyled, width))
 
-	// Row 2: Full-Width Seekbar
-	elapsedStr := FormatDuration(progressMs)
-	totalStr := FormatDuration(durationMs)
+	elapsedStr := theme.FormatDuration(progressMs)
+	totalStr := theme.FormatDuration(durationMs)
 	if durationMs == 0 {
 		totalStr = "--:--"
 	}
@@ -101,13 +101,12 @@ func RenderPlayerLines(state *backend.PlaybackState, focused bool, width int) []
 		}
 	}
 	seekBar := renderProgressBar(seekRatio, seekW)
-	seekLine := BgPad(1) + StyleFaint.Render(elapsedStr) + BgPad(1) + seekBar + BgPad(1) + StyleFaint.Render(totalStr) + BgPad(1)
-	lines = append(lines, PadToWidth(seekLine, width))
+	seekLine := theme.BgPad(1) + theme.StyleFaint.Render(elapsedStr) + theme.BgPad(1) + seekBar + theme.BgPad(1) + theme.StyleFaint.Render(totalStr) + theme.BgPad(1)
+	lines = append(lines, theme.PadToWidth(seekLine, width))
 
 	return lines
 }
 
-// RenderPlayer renders the bottom player with volume slider inside a border that highlights when focused
 func RenderPlayer(state *backend.PlaybackState, focused bool, width int) string {
 	contentW := width - 2
 	if contentW < 30 {
@@ -123,20 +122,20 @@ func RenderPlayer(state *backend.PlaybackState, focused bool, width int) string 
 			devName = state.DeviceName
 		}
 		if state.DeviceType != "" {
-			devGlyph = DeviceTypeGlyph(state.DeviceType)
+			devGlyph = theme.DeviceTypeGlyph(state.DeviceType)
 		}
 	}
-	devTag := BgPad(1) + StyleLavender.Render(devGlyph+TruncateString(devName, 18)) + StyleFaint.Render(" ─")
-	rawDevTag := " " + devGlyph + TruncateString(devName, 18) + " ─"
+	devTag := theme.BgPad(1) + theme.StyleLavender.Render(devGlyph+theme.TruncateString(devName, 18)) + theme.StyleFaint.Render(" ─")
+	rawDevTag := " " + devGlyph + theme.TruncateString(devName, 18) + " ─"
 	devTagW := ansi.StringWidth(rawDevTag)
 
 	cornerTL := "╭"
 	cornerTR := "╮"
 	cornerBL := "╰"
 	cornerBR := "╯"
-	borderStyle := lipgloss.NewStyle().Foreground(CurrentTheme.Outline).Background(CurrentTheme.Surface)
+	borderStyle := lipgloss.NewStyle().Foreground(theme.CurrentTheme.Outline).Background(theme.CurrentTheme.Surface)
 	if focused {
-		borderStyle = lipgloss.NewStyle().Foreground(CurrentTheme.Primary).Background(CurrentTheme.Surface).Bold(true)
+		borderStyle = lipgloss.NewStyle().Foreground(theme.CurrentTheme.Primary).Background(theme.CurrentTheme.Surface).Bold(true)
 	}
 
 	dashesLen := contentW - devTagW
@@ -145,21 +144,24 @@ func RenderPlayer(state *backend.PlaybackState, focused bool, width int) string 
 	}
 
 	topBorder := borderStyle.Render(cornerTL+strings.Repeat("─", dashesLen)) + devTag + borderStyle.Render(cornerTR)
-	bottomBorder := borderStyle.Render(cornerBL+strings.Repeat("─", contentW)+cornerBR)
+	bottomBorder := borderStyle.Render(cornerBL + strings.Repeat("─", contentW) + cornerBR)
 	sideBar := borderStyle.Render("│")
 
 	var output []string
-	output = append(output, PadToWidth(topBorder, width))
+	output = append(output, theme.PadToWidth(topBorder, width))
 	for _, l := range lines {
-		row := sideBar + PadToWidth(l, contentW) + sideBar
-		output = append(output, PadToWidth(row, width))
+		row := sideBar + theme.PadToWidth(l, contentW) + sideBar
+		output = append(output, theme.PadToWidth(row, width))
 	}
-	output = append(output, PadToWidth(bottomBorder, width))
+	output = append(output, theme.PadToWidth(bottomBorder, width))
 
 	return strings.Join(output, "\n")
 }
 
-// RenderMiniSlider renders a mini horizontal slider with thumb dot
+func RenderPlayerBar(state *backend.PlaybackState, focused bool, width int) string {
+	return RenderPlayer(state, focused, width)
+}
+
 func RenderMiniSlider(value, width int) string {
 	if width <= 0 {
 		return ""
@@ -183,11 +185,11 @@ func renderProgressBar(ratio float64, width int) string {
 	}
 	emptyChars := width - filledChars
 
-	filled := lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render(strings.Repeat("━", filledChars))
-	thumb := lipgloss.NewStyle().Foreground(CurrentTheme.Tertiary).Background(CurrentTheme.Surface).Bold(true).Render("●")
+	filled := lipgloss.NewStyle().Foreground(theme.CurrentTheme.Tertiary).Background(theme.CurrentTheme.Surface).Bold(true).Render(strings.Repeat("━", filledChars))
+	thumb := lipgloss.NewStyle().Foreground(theme.CurrentTheme.Tertiary).Background(theme.CurrentTheme.Surface).Bold(true).Render("●")
 
 	if emptyChars > 0 {
-		empty := StyleFaint.Render(strings.Repeat("─", emptyChars-1))
+		empty := theme.StyleFaint.Render(strings.Repeat("─", emptyChars-1))
 		return filled + thumb + empty
 	}
 	return filled
@@ -213,6 +215,6 @@ func alignRow(left, center, right string, totalW int) string {
 		rightPad = 1
 	}
 
-	mid := left + BgPad(leftPad) + center + BgPad(rightPad) + right
-	return PadToWidth(mid, totalW)
+	mid := left + theme.BgPad(leftPad) + center + theme.BgPad(rightPad) + right
+	return theme.PadToWidth(mid, totalW)
 }

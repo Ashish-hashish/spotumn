@@ -1,17 +1,14 @@
 # Compiled binaries
 -spotumn
 +/spotumn
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
 bin/
 dist/
 
 # Test binaries
+/test/
 *.test
 *_test.go
+
 # Output of the go coverage tool
 *.out
 

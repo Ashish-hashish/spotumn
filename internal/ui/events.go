@@ -1,3 +1,4 @@
+// Keyboard input dispatcher and event routing - handles keypresses across navigation, playback, and modals.
 package ui
 
 import (
@@ -15,14 +16,13 @@ import (
 	"spotumn/internal/config"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/zmb3/spotify/v2"
 )
 
 func getPinnedPath() string {
 	return filepath.Join(config.GetDir(), "pinned.json")
 }
 
-func loadPinned() ([]string, map[string]bool) {
+func LoadPinned() ([]string, map[string]bool) {
 	order := []string{}
 	set := make(map[string]bool)
 	data, err := os.ReadFile(getPinnedPath())
@@ -46,18 +46,23 @@ func loadPinned() ([]string, map[string]bool) {
 	return order, set
 }
 
+func loadPinned() ([]string, map[string]bool) {
+	return LoadPinned()
+}
+
 func savePinned(order []string) {
 	data, _ := json.Marshal(order)
 	_ = os.WriteFile(getPinnedPath(), data, 0600)
 }
 
+// hoist pinned playlists to the top in user-defined order followed by remaining items
 func sortPlaylistsWithPinned(playlists []backend.Playlist, pinnedOrder []string) []backend.Playlist {
 	if len(playlists) <= 1 {
 		return playlists
 	}
 	pinRank := make(map[string]int, len(pinnedOrder))
 	for idx, uri := range pinnedOrder {
-		pinRank[uri] = idx + 1 // 1 is oldest (top), len is newest (bottom)
+		pinRank[uri] = idx + 1
 	}
 
 	res := make([]backend.Playlist, len(playlists))
@@ -67,7 +72,7 @@ func sortPlaylistsWithPinned(playlists []backend.Playlist, pinnedOrder []string)
 		rankJ := pinRank[res[j].URI]
 
 		if rankI > 0 && rankJ > 0 {
-			// Both are pinned: old on top (smaller rank), new on bottom (larger rank)
+
 			return rankI < rankJ
 		}
 		if rankI > 0 {
@@ -127,10 +132,12 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			m.helpEditing = true
+			if m.helpIndex >= 0 && m.helpIndex < len(km.Items) && !km.Items[m.helpIndex].ReadOnly {
+				m.helpEditing = true
+			}
 			return m, nil
 		case "0":
-			if !km.IsKeyUsed("0") {
+			if !km.IsKeyUsed("0") && m.helpIndex >= 0 && m.helpIndex < len(km.Items) && !km.Items[m.helpIndex].ReadOnly {
 				if km.Items[m.helpIndex].Key != km.Items[m.helpIndex].DefaultKey {
 					km.ResetItem(m.helpIndex)
 				} else {
@@ -145,15 +152,26 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.showSettings {
 		switch key {
-		case "`", "~", "esc":
+		case "`", "~":
+			m.showSettings = false
+			m.settingsState.ConfirmLogout = false
+			return m, nil
+		case "esc":
+			if m.settingsState.ConfirmLogout {
+				m.settingsState.ConfirmLogout = false
+				m.settingsState.Status = "Logout cancelled."
+				return m, nil
+			}
 			m.showSettings = false
 			return m, nil
 		case "up":
+			m.settingsState.ConfirmLogout = false
 			if m.settingsState.Index > 0 {
 				m.settingsState.Index--
 			}
 			return m, nil
 		case "down":
+			m.settingsState.ConfirmLogout = false
 			if m.settingsState.Index < SettingItemCount-1 {
 				m.settingsState.Index++
 			}
@@ -504,7 +522,6 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.albums = sortPlaylistsWithPinned(m.albums, m.pinnedOrder)
 				m.artists = sortPlaylistsWithPinned(m.artists, m.pinnedOrder)
 
-				// Keep navIndex on the toggled item so user cursor doesn't jump
 				plsAfter := m.filteredPlaylists()
 				for idx, pl := range plsAfter {
 					if pl.URI == uri {
@@ -796,7 +813,7 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 		m.settingsState.Status = "Theme set to " + newTheme
 
 	case 1:
-		modes := []string{"dark", "light", "auto"}
+		modes := []string{"dark", "light"}
 		curIdx := 0
 		for i, mode := range modes {
 			if strings.EqualFold(mode, m.settingsState.Mode) {
@@ -819,6 +836,7 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 	case 2:
 		cfg.AutoShrinkSidebars = !cfg.AutoShrinkSidebars
 		m.settingsState.AutoShrink = cfg.AutoShrinkSidebars
+		m.autoShrinkSidebars = cfg.AutoShrinkSidebars
 		_ = config.Save(cfg)
 		if cfg.AutoShrinkSidebars {
 			m.settingsState.Status = "Auto-shrink sidebars: Enabled"
@@ -837,21 +855,9 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 		cfg.CrossfadeSec = val
 		_ = config.Save(cfg)
 		if val == 0 {
-			m.settingsState.Status = "Crossfade: Off"
+			m.settingsState.Status = "Crossfade: Off (saved • applies on restart)"
 		} else {
-			m.settingsState.Status = fmt.Sprintf("Crossfade: %ds", val)
-		}
-		if m.daemon != nil && m.daemon.IsRunning() {
-			wasPlaying := m.playback != nil && m.playback.Playing
-			go func() {
-				_ = m.daemon.Restart("")
-				if wasPlaying {
-					time.Sleep(300 * time.Millisecond)
-					_ = m.client.TransferPlayback(context.Background(), spotify.ID(m.daemon.DeviceId()))
-					time.Sleep(100 * time.Millisecond)
-					_ = m.client.Play(context.Background())
-				}
-			}()
+			m.settingsState.Status = fmt.Sprintf("Crossfade: %ds (saved • applies on restart)", val)
 		}
 
 	case 4:
@@ -868,43 +874,19 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 		m.settingsState.Bitrate = newBitrate
 		cfg.Bitrate = newBitrate
 		_ = config.Save(cfg)
-		m.settingsState.Status = fmt.Sprintf("Audio quality: %dkbps", newBitrate)
-		if m.daemon != nil && m.daemon.IsRunning() {
-			wasPlaying := m.playback != nil && m.playback.Playing
-			go func() {
-				_ = m.daemon.Restart("")
-				if wasPlaying {
-					time.Sleep(300 * time.Millisecond)
-					_ = m.client.TransferPlayback(context.Background(), spotify.ID(m.daemon.DeviceId()))
-					time.Sleep(100 * time.Millisecond)
-					_ = m.client.Play(context.Background())
-				}
-			}()
-		}
+		m.settingsState.Status = fmt.Sprintf("Audio quality: %dkbps (saved • applies on restart)", newBitrate)
 
 	case 5:
-		cfg.Normalisation = !cfg.Normalisation
-		m.settingsState.Normalisation = cfg.Normalisation
+		m.settingsState.Normalisation = !m.settingsState.Normalisation
+		cfg.Normalisation = m.settingsState.Normalisation
 		_ = config.Save(cfg)
 		if cfg.Normalisation {
-			m.settingsState.Status = "Volume normalisation: Enabled"
+			m.settingsState.Status = "Volume normalisation: Enabled (saved • applies on restart)"
 		} else {
-			m.settingsState.Status = "Volume normalisation: Disabled"
-		}
-		if m.daemon != nil && m.daemon.IsRunning() {
-			wasPlaying := m.playback != nil && m.playback.Playing
-			go func() {
-				_ = m.daemon.Restart("")
-				if wasPlaying {
-					time.Sleep(300 * time.Millisecond)
-					_ = m.client.TransferPlayback(context.Background(), spotify.ID(m.daemon.DeviceId()))
-					time.Sleep(100 * time.Millisecond)
-					_ = m.client.Play(context.Background())
-				}
-			}()
+			m.settingsState.Status = "Volume normalisation: Disabled (saved • applies on restart)"
 		}
 
-	case 7:
+	case 6:
 		accMgr := auth.NewAccountManager()
 		accounts := accMgr.GetAccounts()
 		if len(accounts) <= 1 {
@@ -915,7 +897,7 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 		switched, err := accMgr.SwitchAccount(nextIdx)
 		if err == nil && switched != nil {
 			m.settingsState.ActiveAccIdx = nextIdx
-			m.settingsState.Status = "✓ Switched to " + switched.DisplayName
+			m.settingsState.Status = "✓ Switched to " + switched.DisplayName + " (experimental)"
 			authSvc := auth.NewAuthService(config.Get())
 			m.client = backend.NewClient(context.Background(), authSvc.GetTokenSource(context.Background()))
 			if m.daemon != nil {
@@ -924,6 +906,19 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(m.fetchUserCmd(), m.fetchPlaylistsCmd(), m.fetchPlaybackCmd())
 		}
+
+	case 7:
+		if m.settingsState.ConfirmLogout {
+			m.settingsState.ConfirmLogout = false
+			m.settingsState.Status = "Logout cancelled."
+		}
+
+	case 8:
+		targets := 4
+		next := (m.settingsState.CacheTarget + delta + targets) % targets
+		m.settingsState.CacheTarget = next
+		names := []string{"All Cache", "Album Art Only", "Audio Chunks Only", "Playback State Only"}
+		m.settingsState.Status = "Cache target: " + names[next]
 	}
 	return m, nil
 }
@@ -931,21 +926,36 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 func (m *AppModel) handleSettingsAction() (tea.Model, tea.Cmd) {
 	switch m.settingsState.Index {
 	case 6:
-		_ = ClearCache()
-		m.settingsState.Status = "✓ Cache cleared (~/.cache/spotumn)"
-		return m, nil
-
-	case 7:
-		m.settingsState.Status = "Opening browser for Spotify login..."
+		m.settingsState.Status = "Opening browser for Spotify login (experimental)..."
 		return m, m.addAccountCmd()
 
-	case 8:
+	case 7:
+		if !m.settingsState.ConfirmLogout {
+			m.settingsState.ConfirmLogout = true
+			m.settingsState.Status = "⚠ Confirm logout: Press Enter again to confirm, or Esc to cancel."
+			return m, nil
+		}
+		m.settingsState.ConfirmLogout = false
 		credPath := filepath.Join(config.GetDir(), "credentials.json")
 		_ = os.Remove(credPath)
 		_ = os.Remove(filepath.Join(config.GetCacheDir(), "librespot", "state.json"))
-		m.settingsState.Status = "Session credentials cleared."
+		m.settingsState.Status = "Session credentials cleared. Spotumn will require login on next launch."
 		return m, nil
 
+	case 8:
+		_ = ClearCacheTarget(m.settingsState.CacheTarget)
+		names := []string{
+			"All cache purged (~/.cache/spotumn)",
+			"Album art cache purged (~/art)",
+			"Audio chunks cache purged (~/librespot/audio)",
+			"Playback state purged",
+		}
+		if m.settingsState.CacheTarget >= 0 && m.settingsState.CacheTarget < len(names) {
+			m.settingsState.Status = "✓ " + names[m.settingsState.CacheTarget]
+		} else {
+			m.settingsState.Status = "✓ Cache purged."
+		}
+		return m, nil
 	}
 	return m, nil
 }

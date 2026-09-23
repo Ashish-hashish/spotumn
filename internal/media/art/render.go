@@ -1,3 +1,4 @@
+// Album art fetcher and caching engine - downloads covers and converts images to terminal graphics.
 package art
 
 import (
@@ -60,7 +61,10 @@ func NewRenderer(mode string) *Renderer {
 	}
 }
 
-// Render returns the UI layout ANSI text and disk path of the album artwork.
+func (r *Renderer) Mode() string {
+	return r.mode
+}
+
 func (r *Renderer) Render(imageURL string, width, height int) (string, string, error) {
 	if imageURL == "" || width <= 0 || height <= 0 {
 		return "", "", nil
@@ -83,16 +87,15 @@ func (r *Renderer) Render(imageURL string, width, height int) (string, string, e
 
 	var rendered string
 
-	// Full edition with chafa: renders 24-bit TrueColor sextant character art
+	// try chafa rendering first, falling back to pure ansi half-blocks
 	if HasChafaSupport && r.hasChafa && diskPath != "" && r.mode != "ansi" {
 		if out, err := r.renderWithChafa(diskPath, width, height); err == nil && len(strings.TrimSpace(out)) > 0 {
 			rendered = out
 		}
 	}
 
-	// Pure Go fallback: 24-bit Truecolor half-blocks (▀)
 	if rendered == "" && img != nil {
-		rendered = r.toHalfBlocks(img, width, height)
+		rendered = r.ToHalfBlocks(img, width, height)
 	}
 
 	r.mu.Lock()
@@ -117,7 +120,6 @@ func (r *Renderer) Render(imageURL string, width, height int) (string, string, e
 	return rendered, diskPath, nil
 }
 
-// renderWithChafa uses the system chafa binary to render 24-bit Truecolor sextant character art
 func (r *Renderer) renderWithChafa(diskPath string, width, height int) (string, error) {
 	cmd := exec.Command("chafa",
 		"--probe=off",
@@ -161,7 +163,6 @@ func (r *Renderer) ensureImage(imageURL string) (string, image.Image, error) {
 	h := sha256.Sum256([]byte(imageURL))
 	diskPath := filepath.Join(r.cacheDir, hex.EncodeToString(h[:]))
 
-	// Try loading cached image from disk
 	if f, err := os.Open(diskPath); err == nil {
 		defer f.Close()
 		img, _, err := image.Decode(f)
@@ -170,7 +171,6 @@ func (r *Renderer) ensureImage(imageURL string) (string, image.Image, error) {
 		}
 	}
 
-	// Fetch from network with bounded reader
 	req, err := http.NewRequest("GET", imageURL, nil)
 	if err != nil {
 		return "", nil, err
@@ -186,7 +186,6 @@ func (r *Renderer) ensureImage(imageURL string) (string, image.Image, error) {
 		return "", nil, fmt.Errorf("image fetch failed with status %d", resp.StatusCode)
 	}
 
-	// Limit to max 10MB to prevent decompression bombs
 	lr := io.LimitReader(resp.Body, 10*1024*1024)
 	tmpFile, err := os.CreateTemp(r.cacheDir, "art-*")
 	if err != nil {
@@ -216,8 +215,8 @@ func (r *Renderer) ensureImage(imageURL string) (string, image.Image, error) {
 	return diskPath, img, nil
 }
 
-// toHalfBlocks converts an image into pure Go ANSI half-block characters (▀) with pre-allocated buffer
-func (r *Renderer) toHalfBlocks(img image.Image, targetW, targetH int) string {
+// downscale image into half-block unicode cells using top/bottom truecolor fg/bg
+func (r *Renderer) ToHalfBlocks(img image.Image, targetW, targetH int) string {
 	bounds := img.Bounds()
 	imgW := bounds.Dx()
 	imgH := bounds.Dy()

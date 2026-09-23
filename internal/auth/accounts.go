@@ -1,3 +1,4 @@
+// EXPERIMENTAL: Multi-account profile management - handles saving, switching, and migrating Spotify user credentials.
 package auth
 
 import (
@@ -9,13 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"spotumn/internal/config"
 	"golang.org/x/oauth2"
+	"spotumn/internal/config"
 )
 
 const MaxAccounts = 4
 
-// Account represents an authenticated Spotify user profile
 type Account struct {
 	ID          string        `json:"id"`
 	DisplayName string        `json:"display_name"`
@@ -28,7 +28,6 @@ type accountStore struct {
 	ActiveIndex int       `json:"active_index"`
 }
 
-// AccountManager coordinates multi-account profiles (up to 4 accounts)
 type AccountManager struct {
 	file string
 	mu   sync.RWMutex
@@ -43,7 +42,6 @@ func NewAccountManager() *AccountManager {
 	return mgr
 }
 
-// Load reads accounts from disk or initializes from existing credentials.json
 func (m *AccountManager) Load() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -60,7 +58,7 @@ func (m *AccountManager) Load() error {
 		}
 	}
 
-	// Migrate from legacy single-account credentials.json if present
+	// seamlessly migrate legacy single-user credentials into multi-account format
 	legacyFile := filepath.Join(config.GetDir(), "credentials.json")
 	if legData, err := os.ReadFile(legacyFile); err == nil {
 		var stored StoredCredentials
@@ -78,7 +76,6 @@ func (m *AccountManager) Load() error {
 		}
 	}
 
-
 	return nil
 }
 
@@ -90,7 +87,6 @@ func (m *AccountManager) saveLocked() error {
 	return os.WriteFile(m.file, bytes, 0600)
 }
 
-// GetAccounts returns all registered accounts (oldest 1 to newest n<=4)
 func (m *AccountManager) GetAccounts() []Account {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -104,7 +100,6 @@ func (m *AccountManager) ListAccounts() []Account {
 	return m.GetAccounts()
 }
 
-// GetActiveIndex returns the index of the currently active account
 func (m *AccountManager) GetActiveIndex() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -115,7 +110,6 @@ func (m *AccountManager) ActiveIndex() int {
 	return m.GetActiveIndex()
 }
 
-// GetActiveAccount returns the active account or nil
 func (m *AccountManager) GetActiveAccount() *Account {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -127,12 +121,10 @@ func (m *AccountManager) GetActiveAccount() *Account {
 	return &acc
 }
 
-// AddAccount adds a new account or updates an existing one, capping at MaxAccounts
 func (m *AccountManager) AddAccount(userID, displayName string, token *oauth2.Token) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Update existing account if matching ID found
 	for i, acc := range m.data.Accounts {
 		if acc.ID == userID && userID != "" && userID != "default" {
 			m.data.Accounts[i].Token = token
@@ -166,7 +158,6 @@ func (m *AccountManager) AddAccount(userID, displayName string, token *oauth2.To
 	return m.data.ActiveIndex, m.saveLocked()
 }
 
-// SwitchAccount changes the active account index and syncs credentials
 func (m *AccountManager) SwitchAccount(idx int) (*Account, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -183,7 +174,6 @@ func (m *AccountManager) SwitchAccount(idx int) (*Account, error) {
 	return &acc, nil
 }
 
-// syncActiveTokenLocked writes active token to ~/.config/spotumn/credentials.json
 func (m *AccountManager) syncActiveTokenLocked() error {
 	if len(m.data.Accounts) == 0 || m.data.ActiveIndex < 0 || m.data.ActiveIndex >= len(m.data.Accounts) {
 		return nil
@@ -204,4 +194,3 @@ func (m *AccountManager) syncActiveTokenLocked() error {
 	credFile := filepath.Join(config.GetDir(), "credentials.json")
 	return os.WriteFile(credFile, data, 0600)
 }
-

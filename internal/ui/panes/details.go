@@ -1,4 +1,5 @@
-package ui
+// Right sidebar pane - renders album artwork, track information, and synchronized lyrics display.
+package panes
 
 import (
 	"fmt"
@@ -6,9 +7,10 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"spotumn/internal/backend"
+	"spotumn/internal/ui/theme"
 )
 
-// RenderRightLines generates lines for the right sidebar (Now Playing + Live Queue)
+// render right sidebar with album art, track credits, and upcoming queue
 func RenderRightLines(
 	artANSI string,
 	currentTrack *backend.Track,
@@ -26,14 +28,12 @@ func RenderRightLines(
 
 	var lines []string
 
-	// Header
 	infoTitle := " Now Playing "
 	if focused && queueIndex < 0 {
 		infoTitle = " ● Now Playing "
 	}
-	lines = append(lines, PadToWidth(StylePurple.Render(infoTitle), width))
+	lines = append(lines, theme.PadToWidth(theme.StylePurple.Render(infoTitle), width))
 
-	// Art lines (enlarged, constrained to sidebar width without ANSI bleed)
 	if artANSI != "" {
 		for _, row := range strings.Split(artANSI, "\n") {
 			row = strings.TrimRight(row, "\r")
@@ -49,39 +49,37 @@ func RenderRightLines(
 					row = ansi.Truncate(row, width, "") + "\x1b[0m"
 				}
 			}
-			lines = append(lines, CenterLine(row, width))
+			lines = append(lines, theme.CenterLine(row, width))
 		}
 	}
 
-	// Track Info
 	if currentTrack != nil && currentTrack.Name != "" {
-		trackName := TruncateString(currentTrack.Name, width-4)
-		artistName := TruncateString(currentTrack.Artist, width-4)
-		albumName := TruncateString(currentTrack.Album, width-4)
+		trackName := theme.TruncateString(currentTrack.Name, width-4)
+		artistName := theme.TruncateString(currentTrack.Artist, width-4)
+		albumName := theme.TruncateString(currentTrack.Album, width-4)
 
-		lines = append(lines, PadToWidth(BgPad(2)+StyleBold.Render(trackName), width))
-		lines = append(lines, PadToWidth(BgPad(2)+StyleLavender.Render(artistName), width))
+		lines = append(lines, theme.PadToWidth(theme.BgPad(2)+theme.StyleBold.Render(trackName), width))
+		lines = append(lines, theme.PadToWidth(theme.BgPad(2)+theme.StyleLavender.Render(artistName), width))
 
 		if albumName != "" {
-			lines = append(lines, PadToWidth(BgPad(2)+StyleFaint.Render(albumName), width))
+			lines = append(lines, theme.PadToWidth(theme.BgPad(2)+theme.StyleFaint.Render(albumName), width))
 		}
 	} else {
-		lines = append(lines, PadToWidth(BgPad(2)+StyleFaint.Render("No track playing"), width))
+		lines = append(lines, theme.PadToWidth(theme.BgPad(2)+theme.StyleFaint.Render("No track playing"), width))
 	}
 
-	// Divider before queue with right-aligned keybind badge
-	lines = append(lines, PadToWidth("", width))
+	lines = append(lines, theme.PadToWidth("", width))
 	prefix := "── UP NEXT "
-	badge := BgPad(1) + StylePurple.Render("⌜") + StyleBold.Render("q") + StylePurple.Render("⌟") + BgPad(1) + StyleLavender.Render("Queue") + StyleFaint.Render(" ──")
+	badge := theme.BgPad(1) + theme.StylePurple.Render("⌜") + theme.StyleBold.Render("q") + theme.StylePurple.Render("⌟") + theme.BgPad(1) + theme.StyleLavender.Render("Queue") + theme.StyleFaint.Render(" ──")
 	rawBadge := " ⌜q⌟ Queue ──"
 	neededDashes := width - ansi.StringWidth(prefix) - ansi.StringWidth(rawBadge)
 	var queueHeaderLine string
 	if neededDashes > 0 {
-		queueHeaderLine = StyleFaint.Render(prefix+strings.Repeat("─", neededDashes)) + badge
+		queueHeaderLine = theme.StyleFaint.Render(prefix+strings.Repeat("─", neededDashes)) + badge
 	} else {
-		queueHeaderLine = StyleFaint.Render(TruncateString(prefix, width))
+		queueHeaderLine = theme.StyleFaint.Render(theme.TruncateString(prefix, width))
 	}
-	lines = append(lines, PadToWidth(queueHeaderLine, width))
+	lines = append(lines, theme.PadToWidth(queueHeaderLine, width))
 
 	headerLinesCount := len(lines)
 	availableQueueRows := height - headerLinesCount
@@ -97,7 +95,7 @@ func RenderRightLines(
 	for i := 0; i < availableQueueRows; i++ {
 		qIdx := scrollOffset + i
 		if qIdx >= len(queue) {
-			lines = append(lines, PadToWidth("", width))
+			lines = append(lines, theme.PadToWidth("", width))
 			continue
 		}
 
@@ -114,7 +112,7 @@ func RenderRightLines(
 		if item.Artist != "" {
 			display += " - " + item.Artist
 		}
-		truncDisplay := TruncateString(display, width-4)
+		truncDisplay := theme.TruncateString(display, width-4)
 
 		rawDisplay := "  " + truncDisplay
 		if isSelected {
@@ -123,28 +121,27 @@ func RenderRightLines(
 
 		var lineContent string
 		if isSelected && focused {
-			lineContent = RenderPaddedLine(rawDisplay, StyleActiveFocusedBlock, width)
+			lineContent = theme.RenderPaddedLine(rawDisplay, theme.StyleActiveFocusedBlock, width)
 		} else if isSelected {
-			lineContent = RenderPaddedLine(rawDisplay, StyleActiveUnfocusedBlock, width)
+			lineContent = theme.RenderPaddedLine(rawDisplay, theme.StyleActiveUnfocusedBlock, width)
 		} else {
-			// Unselected queue row: distinct colors for title and artist
-			numStyled := StyleFaint.Render("  " + numPrefix)
+			numStyled := theme.StyleFaint.Render("  " + numPrefix)
 			remW := width - 4 - ansi.StringWidth(numPrefix)
 			if remW < 4 {
 				remW = 4
 			}
 			var contentStyled string
 			if item.Artist != "" {
-				namePart := TruncateString(item.Name, remW*60/100)
-				artistPart := TruncateString(item.Artist, remW-ansi.StringWidth(namePart)-3)
-				contentStyled = StyleBold.Render(namePart) + StyleFaint.Render(" - ") + StyleLavender.Render(artistPart)
+				namePart := theme.TruncateString(item.Name, remW*60/100)
+				artistPart := theme.TruncateString(item.Artist, remW-ansi.StringWidth(namePart)-3)
+				contentStyled = theme.StyleBold.Render(namePart) + theme.StyleFaint.Render(" - ") + theme.StyleLavender.Render(artistPart)
 			} else {
-				contentStyled = StyleBold.Render(TruncateString(item.Name, remW))
+				contentStyled = theme.StyleBold.Render(theme.TruncateString(item.Name, remW))
 			}
 			rowText := numStyled + contentStyled
 			remPad := width - ansi.StringWidth(rowText)
 			if remPad > 0 {
-				rowText += BgPad(remPad)
+				rowText += theme.BgPad(remPad)
 			}
 			lineContent = rowText
 		}
@@ -153,7 +150,7 @@ func RenderRightLines(
 	}
 
 	for len(lines) < height {
-		lines = append(lines, PadToWidth("", width))
+		lines = append(lines, theme.PadToWidth("", width))
 	}
 	if len(lines) > height {
 		lines = lines[:height]
@@ -162,7 +159,6 @@ func RenderRightLines(
 	return lines
 }
 
-// RenderMergedRight renders the right pane inside a border that highlights when focused
 func RenderMergedRight(
 	artANSI string,
 	currentTrack *backend.Track,
@@ -181,6 +177,17 @@ func RenderMergedRight(
 	}
 
 	lines := RenderRightLines(artANSI, currentTrack, queue, queueIndex, focused, contentW, contentH)
-	boxStyle := PanelBox(focused, width, height)
+	boxStyle := theme.PanelBox(focused, width, height)
 	return boxStyle.Render(strings.Join(lines, "\n"))
+}
+
+func RenderRightPane(
+	artANSI string,
+	currentTrack *backend.Track,
+	queue []backend.Track,
+	queueIndex int,
+	focused bool,
+	width, height int,
+) string {
+	return RenderMergedRight(artANSI, currentTrack, queue, queueIndex, focused, width, height)
 }
