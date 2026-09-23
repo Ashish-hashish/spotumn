@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"spotumn/internal/config"
 
@@ -33,6 +36,7 @@ type Playlist struct {
 	OwnerID    string
 	TrackCount int
 	ImageURL   string
+	Index      int
 }
 
 type QueueData struct {
@@ -49,19 +53,115 @@ type PlaybackState struct {
 	Repeat       string // "off", "context", "track"
 	DeviceName   string
 	DeviceID     string
+	DeviceType   string
 	CurrentTrack *Track
 	ContextURI   string
 }
 
+type SessionState int
+
+const (
+	StateIdle SessionState = iota
+	StateRemoteActive
+	StateLocalActive
+	StateTransferring
+)
+
+func (s SessionState) String() string {
+	switch s {
+	case StateRemoteActive:
+		return "REMOTE_ACTIVE"
+	case StateLocalActive:
+		return "LOCAL_ACTIVE"
+	case StateTransferring:
+		return "TRANSFERRING"
+	default:
+		return "IDLE"
+	}
+}
+
 type Client struct {
-	spClient       *spotify.Client
-	mu             sync.RWMutex
-	lastState      *PlaybackState
-	explicitRemote bool
+	spClient         *spotify.Client
+	mu               sync.RWMutex
+	lastState        *PlaybackState
+	cachedDevices    []spotify.PlayerDevice
+	devicesFetchedAt time.Time
+	localDeviceID    string
+	sessionState     SessionState
+	activeDeviceID   string
+	activeDeviceName string
+}
+
+func (c *Client) SessionState() SessionState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.sessionState
+}
+
+func (c *Client) SetSessionState(st SessionState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionState = st
+}
+
+func (c *Client) ActiveDevice() (id, name string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.activeDeviceID, c.activeDeviceName
+}
+
+func (c *Client) SetActiveDevice(id, name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.activeDeviceID = id
+	c.activeDeviceName = name
+}
+
+func (c *Client) SetLocalDeviceID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.localDeviceID = id
+}
+
+func (c *Client) LocalDeviceID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.localDeviceID
+}
+
+type rateLimitTransport struct {
+	base http.RoundTripper
+}
+
+func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		retrySec := 2
+		if s := resp.Header.Get("Retry-After"); s != "" {
+			if sec, err := strconv.Atoi(s); err == nil && sec > 0 {
+				retrySec = sec
+			}
+		}
+		if retrySec > 5 {
+			retrySec = 5
+		}
+		_ = resp.Body.Close()
+		time.Sleep(time.Duration(retrySec) * time.Second)
+		return t.base.RoundTrip(req)
+	}
+	return resp, nil
 }
 
 func NewClient(ctx context.Context, ts oauth2.TokenSource) *Client {
 	httpClient := oauth2.NewClient(ctx, ts)
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	httpClient.Transport = &rateLimitTransport{base: base}
 	sp := spotify.New(httpClient)
 	return &Client{
 		spClient: sp,
@@ -101,9 +201,6 @@ func extractTrack(t *spotify.FullTrack) Track {
 
 // GetPlaybackState fetches the current player state with fallback
 func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	state, err := c.spClient.PlayerState(ctx)
 	if err == nil && state != nil {
 		ps := &PlaybackState{
@@ -114,6 +211,7 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 			Repeat:     state.RepeatState,
 			DeviceName: state.Device.Name,
 			DeviceID:   string(state.Device.ID),
+			DeviceType: state.Device.Type,
 		}
 		if state.Item != nil {
 			track := extractTrack(state.Item)
@@ -123,6 +221,22 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 		if state.PlaybackContext.URI != "" {
 			ps.ContextURI = string(state.PlaybackContext.URI)
 		}
+
+		c.mu.Lock()
+		c.activeDeviceID = string(state.Device.ID)
+		c.activeDeviceName = state.Device.Name
+		localID := c.localDeviceID
+		if c.sessionState != StateTransferring {
+			if (localID != "" && string(state.Device.ID) == localID) || strings.EqualFold(state.Device.Name, "spotumn") {
+				c.sessionState = StateLocalActive
+			} else if state.Playing || state.Device.ID != "" {
+				c.sessionState = StateRemoteActive
+			} else {
+				c.sessionState = StateIdle
+			}
+		}
+		c.mu.Unlock()
+
 		return ps, nil
 	}
 
@@ -133,6 +247,13 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 		if cp.PlaybackContext.URI != "" {
 			ctxURI = string(cp.PlaybackContext.URI)
 		}
+
+		c.mu.Lock()
+		if c.sessionState != StateTransferring && c.sessionState != StateLocalActive {
+			c.sessionState = StateRemoteActive
+		}
+		c.mu.Unlock()
+
 		return &PlaybackState{
 			Playing:      cp.Playing,
 			ProgressMs:   int(cp.Progress),
@@ -143,14 +264,19 @@ func (c *Client) GetPlaybackState(ctx context.Context) (*PlaybackState, error) {
 		}, nil
 	}
 
+	c.mu.Lock()
+	if c.sessionState != StateTransferring && c.sessionState != StateLocalActive {
+		c.sessionState = StateIdle
+		c.activeDeviceID = ""
+		c.activeDeviceName = ""
+	}
+	c.mu.Unlock()
+
 	return &PlaybackState{Volume: 50}, nil
 }
 
 // GetQueue fetches the real-time playback queue
 func (c *Client) GetQueue(ctx context.Context) (*QueueData, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	res := &QueueData{}
 	q, err := c.spClient.GetQueue(ctx)
 	if err != nil || q == nil {
@@ -175,9 +301,6 @@ func (c *Client) GetQueue(ctx context.Context) (*QueueData, error) {
 
 // GetRecommendationsOrTopTracks fetches user's top/saved tracks or popular tracks
 func (c *Client) GetRecommendationsOrTopTracks(ctx context.Context) ([]Track, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var tracks []Track
 
 	// 1. Try user's top tracks
@@ -240,9 +363,6 @@ func extractTrackID(uriOrID string) string {
 
 // GetAllPlaylists paginates through all user playlists
 func (c *Client) GetAllPlaylists(ctx context.Context) ([]Playlist, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var playlists []Playlist
 	limit := 50
 	offset := 0
@@ -265,6 +385,7 @@ func (c *Client) GetAllPlaylists(ctx context.Context) ([]Playlist, error) {
 				OwnerID:    string(p.Owner.ID),
 				TrackCount: int(p.Tracks.Total),
 				ImageURL:   img,
+				Index:      len(playlists),
 			})
 		}
 
@@ -279,9 +400,6 @@ func (c *Client) GetAllPlaylists(ctx context.Context) ([]Playlist, error) {
 
 // GetPlaylistTracks fetches all tracks from a playlist with fallback
 func (c *Client) GetPlaylistTracks(ctx context.Context, playlistID string) ([]Track, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var tracks []Track
 	limit := 100
 	offset := 0
@@ -320,9 +438,6 @@ func (c *Client) GetPlaylistTracks(ctx context.Context, playlistID string) ([]Tr
 
 // GetAlbums fetches the user's saved albums from Spotify
 func (c *Client) GetAlbums(ctx context.Context) ([]Playlist, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var albums []Playlist
 	limit := 50
 	offset := 0
@@ -349,6 +464,7 @@ func (c *Client) GetAlbums(ctx context.Context) ([]Playlist, error) {
 				OwnerID:    artistName,
 				TrackCount: int(a.Tracks.Total),
 				ImageURL:   img,
+				Index:      len(albums),
 			})
 		}
 
@@ -363,9 +479,6 @@ func (c *Client) GetAlbums(ctx context.Context) ([]Playlist, error) {
 
 // GetArtists fetches user's followed artists, falling back to top artists
 func (c *Client) GetArtists(ctx context.Context) ([]Playlist, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var artists []Playlist
 
 	// 1. Try followed artists first
@@ -383,6 +496,7 @@ func (c *Client) GetArtists(ctx context.Context) ([]Playlist, error) {
 				OwnerID:    "Artist",
 				TrackCount: int(a.Popularity),
 				ImageURL:   img,
+				Index:      len(artists),
 			})
 		}
 		return artists, nil
@@ -412,9 +526,6 @@ func (c *Client) GetArtists(ctx context.Context) ([]Playlist, error) {
 
 // GetAlbumTracks fetches all tracks belonging to an album
 func (c *Client) GetAlbumTracks(ctx context.Context, albumID string) ([]Track, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	album, err := c.spClient.GetAlbum(ctx, spotify.ID(albumID))
 	if err == nil && album != nil {
 		artURL := ""
@@ -473,9 +584,6 @@ func (c *Client) GetAlbumTracks(ctx context.Context, albumID string) ([]Track, e
 
 // GetArtistTracks fetches top tracks for an artist
 func (c *Client) GetArtistTracks(ctx context.Context, artistID string) ([]Track, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	fts, err := c.spClient.GetArtistsTopTracks(ctx, spotify.ID(artistID), "from_token")
 	if err != nil || len(fts) == 0 {
 		fts, err = c.spClient.GetArtistsTopTracks(ctx, spotify.ID(artistID), "US")
@@ -492,9 +600,6 @@ func (c *Client) GetArtistTracks(ctx context.Context, artistID string) ([]Track,
 
 // GetArtistAlbums fetches an artist's albums and singles
 func (c *Client) GetArtistAlbums(ctx context.Context, artistID string) ([]Playlist, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	if c.spClient == nil {
 		return nil, nil
 	}
@@ -600,9 +705,6 @@ func (c *Client) GetArtistByName(ctx context.Context, name string) (*Playlist, e
 
 // Search searches for tracks, albums, and artists matching the query
 func (c *Client) Search(ctx context.Context, query string) (tracks []Track, albums []Playlist, artists []Playlist, err error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil, nil, nil
@@ -668,16 +770,11 @@ func (c *Client) Search(ctx context.Context, query string) (tracks []Track, albu
 	return tracks, albums, artists, nil
 }
 
-// PlayTrackList starts playback of a track naturally without wiping queue
+// PlayTrackList starts playback of a playlist or track list
 func (c *Client) PlayTrackList(ctx context.Context, tracks []Track, startIndex int, contextURI string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	opts := &spotify.PlayOptions{}
 
-	opts := &spotify.PlayOptions{
-		DeviceID: c.getTargetDeviceID(ctx),
-	}
-
-	if contextURI != "" {
+	if contextURI != "" && !strings.HasPrefix(contextURI, "search:") {
 		cURI := spotify.URI(contextURI)
 		opts.PlaybackContext = &cURI
 		if startIndex >= 0 && startIndex < len(tracks) {
@@ -685,8 +782,6 @@ func (c *Client) PlayTrackList(ctx context.Context, tracks []Track, startIndex i
 			opts.PlaybackOffset = &spotify.PlaybackOffset{URI: tURI}
 		}
 	} else if len(tracks) > 0 && startIndex >= 0 && startIndex < len(tracks) {
-		// Natural autoplay: pass selected track and upcoming tracks from search/history
-		// so Spotify populates the player's upcoming queue naturally
 		var uris []spotify.URI
 		endIndex := len(tracks)
 		if endIndex-startIndex > 50 {
@@ -698,19 +793,32 @@ func (c *Client) PlayTrackList(ctx context.Context, tracks []Track, startIndex i
 		opts.URIs = uris
 	}
 
-	return c.spClient.PlayOpt(ctx, opts)
-}
-
-// PlayTrack starts playback of a single track with optional context
-func (c *Client) PlayTrack(ctx context.Context, trackURI, contextURI string) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	opts := &spotify.PlayOptions{
-		DeviceID: c.getTargetDeviceID(ctx),
+	last := c.lastState
+	c.mu.RUnlock()
+	if last == nil || !last.Playing {
+		if devID := c.getTargetDeviceID(ctx); devID != nil {
+			opts.DeviceID = devID
+		}
 	}
 
-	if contextURI != "" {
+	err := c.spClient.PlayOpt(ctx, opts)
+	if err != nil && (strings.Contains(err.Error(), "No active device") || strings.Contains(err.Error(), "404")) {
+		if opts.DeviceID == nil {
+			if devID := c.getTargetDeviceID(ctx); devID != nil {
+				opts.DeviceID = devID
+				return c.spClient.PlayOpt(ctx, opts)
+			}
+		}
+	}
+	return err
+}
+
+// PlayTrack starts playback of a single track
+func (c *Client) PlayTrack(ctx context.Context, trackURI, contextURI string) error {
+	opts := &spotify.PlayOptions{}
+
+	if contextURI != "" && !strings.HasPrefix(contextURI, "search:") {
 		cURI := spotify.URI(contextURI)
 		opts.PlaybackContext = &cURI
 		if trackURI != "" {
@@ -721,23 +829,35 @@ func (c *Client) PlayTrack(ctx context.Context, trackURI, contextURI string) err
 		opts.URIs = []spotify.URI{spotify.URI(trackURI)}
 	}
 
-	return c.spClient.PlayOpt(ctx, opts)
-}
-
-func (c *Client) hasActiveDevice(ctx context.Context) bool {
-	devices, err := c.spClient.PlayerDevices(ctx)
-	if err != nil {
-		return false
-	}
-	for _, d := range devices {
-		if d.Active {
-			return true
+	c.mu.RLock()
+	last := c.lastState
+	c.mu.RUnlock()
+	if last == nil || !last.Playing {
+		if devID := c.getTargetDeviceID(ctx); devID != nil {
+			opts.DeviceID = devID
 		}
 	}
-	return false
+
+	err := c.spClient.PlayOpt(ctx, opts)
+	if err != nil && (strings.Contains(err.Error(), "No active device") || strings.Contains(err.Error(), "404")) {
+		if opts.DeviceID == nil {
+			if devID := c.getTargetDeviceID(ctx); devID != nil {
+				opts.DeviceID = devID
+				return c.spClient.PlayOpt(ctx, opts)
+			}
+		}
+	}
+	return err
 }
 
 func (c *Client) findSpotumnDeviceID(ctx context.Context) spotify.ID {
+	c.mu.RLock()
+	localID := c.localDeviceID
+	c.mu.RUnlock()
+	if localID != "" {
+		return spotify.ID(localID)
+	}
+
 	devices, err := c.spClient.PlayerDevices(ctx)
 	if err != nil {
 		return ""
@@ -752,33 +872,38 @@ func (c *Client) findSpotumnDeviceID(ctx context.Context) spotify.ID {
 
 func (c *Client) getTargetDeviceID(ctx context.Context) *spotify.ID {
 	c.mu.RLock()
-	remote := c.explicitRemote
+	activeID := c.activeDeviceID
+	localID := c.localDeviceID
 	c.mu.RUnlock()
 
-	spotumnID := c.findSpotumnDeviceID(ctx)
-
-	// Default to spotumn for audio playback unless the user explicitly selected a remote device
-	if !remote && spotumnID != "" {
-		return &spotumnID
+	if activeID != "" {
+		id := spotify.ID(activeID)
+		return &id
 	}
 
-	// Remote control mode: let active remote device receive playback
-	if c.hasActiveDevice(ctx) {
-		return nil
-	}
-
-	// Fallback to spotumn or first available device
-	if spotumnID != "" {
-		return &spotumnID
-	}
-	devices, err := c.spClient.PlayerDevices(ctx)
+	devices, err := c.GetDevices(ctx)
 	if err == nil && len(devices) > 0 {
+		for _, d := range devices {
+			if d.Active {
+				return &d.ID
+			}
+		}
+		for _, d := range devices {
+			if strings.EqualFold(d.Name, "spotumn") || (localID != "" && string(d.ID) == localID) {
+				return &d.ID
+			}
+		}
 		return &devices[0].ID
+	}
+
+	if localID != "" {
+		id := spotify.ID(localID)
+		return &id
 	}
 	return nil
 }
 
-// SortDevicesWithSpotumnFirst ensures spotumn is always the topmost device (index 0)
+// SortDevicesWithSpotumnFirst places spotumn at index 0
 func SortDevicesWithSpotumnFirst(devices []spotify.PlayerDevice) []spotify.PlayerDevice {
 	if len(devices) <= 1 {
 		return devices
@@ -799,38 +924,96 @@ func SortDevicesWithSpotumnFirst(devices []spotify.PlayerDevice) []spotify.Playe
 	return devices
 }
 
-// GetDevices returns all available Spotify Connect devices with spotumn sorted to the topmost position (index 0)
+// GetDevices returns available Spotify Connect devices
 func (c *Client) GetDevices(ctx context.Context) ([]spotify.PlayerDevice, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	devices, err := c.spClient.PlayerDevices(ctx)
-	if err != nil {
-		return nil, err
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return SortDevicesWithSpotumnFirst(devices), nil
+
+	c.mu.RLock()
+	cached := c.cachedDevices
+	fetchedAt := c.devicesFetchedAt
+	c.mu.RUnlock()
+
+	// Return cached devices immediately if fresh (<4s) or if spClient is nil (e.g. testing)
+	if len(cached) > 0 && (c.spClient == nil || time.Since(fetchedAt) < 4*time.Second) {
+		return cached, nil
+	}
+	if c.spClient == nil {
+		return nil, nil
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+	defer cancel()
+
+	devices, err := c.spClient.PlayerDevices(callCtx)
+	c.mu.RLock()
+	localID := c.localDeviceID
+	last := c.lastState
+	sessionSt := c.sessionState
+	c.mu.RUnlock()
+
+	var result []spotify.PlayerDevice
+	if err == nil && len(devices) > 0 {
+		result = make([]spotify.PlayerDevice, len(devices))
+		copy(result, devices)
+	}
+
+	if localID != "" {
+		hasLocal := false
+		for i := range result {
+			if strings.EqualFold(result[i].Name, "spotumn") || string(result[i].ID) == localID {
+				hasLocal = true
+				break
+			}
+		}
+		if !hasLocal {
+			isLocalActive := (sessionSt == StateLocalActive)
+			if last != nil && (last.DeviceID == localID || strings.EqualFold(last.DeviceName, "spotumn")) {
+				isLocalActive = true
+			}
+			result = append([]spotify.PlayerDevice{{
+				ID:     spotify.ID(localID),
+				Name:   "spotumn",
+				Type:   "Computer",
+				Volume: 50,
+				Active: isLocalActive,
+			}}, result...)
+		}
+	}
+
+	if len(result) == 0 {
+		if len(cached) > 0 {
+			return cached, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	sorted := SortDevicesWithSpotumnFirst(result)
+	c.mu.Lock()
+	c.cachedDevices = sorted
+	c.devicesFetchedAt = time.Now()
+	c.mu.Unlock()
+	return sorted, nil
 }
 
-// TransferPlayback transfers active playback to the given device ID
+// TransferPlayback transfers playback to the specified device
 func (c *Client) TransferPlayback(ctx context.Context, deviceID spotify.ID) error {
-	spotumnID := c.findSpotumnDeviceID(ctx)
 	c.mu.Lock()
-	if spotumnID != "" && deviceID == spotumnID {
-		c.explicitRemote = false
-	} else {
-		c.explicitRemote = true
+	if c.lastState != nil {
+		c.lastState.DeviceID = string(deviceID)
 	}
 	c.mu.Unlock()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.spClient.TransferPlayback(ctx, deviceID, true)
 }
 
 // ToggleDevice toggles playback between spotumn and another available device
 func (c *Client) ToggleDevice(ctx context.Context) (string, error) {
-	c.mu.RLock()
-	devices, err := c.spClient.PlayerDevices(ctx)
-	c.mu.RUnlock()
+	devices, err := c.GetDevices(ctx)
 	if err != nil || len(devices) == 0 {
 		return "", err
 	}
@@ -859,17 +1042,16 @@ func (c *Client) ToggleDevice(ctx context.Context) (string, error) {
 }
 
 func (c *Client) Play(ctx context.Context) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	opts := &spotify.PlayOptions{
-		DeviceID: c.getTargetDeviceID(ctx),
+	err := c.spClient.Play(ctx)
+	if err != nil && (strings.Contains(err.Error(), "No active device") || strings.Contains(err.Error(), "404")) {
+		if devID := c.getTargetDeviceID(ctx); devID != nil {
+			return c.spClient.PlayOpt(ctx, &spotify.PlayOptions{DeviceID: devID})
+		}
 	}
-	return c.spClient.PlayOpt(ctx, opts)
+	return err
 }
 
 func (c *Client) Pause(ctx context.Context) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.spClient.Pause(ctx)
 }
 
@@ -881,26 +1063,18 @@ func (c *Client) PlayPause(ctx context.Context, currentlyPlaying bool) error {
 }
 
 func (c *Client) Next(ctx context.Context) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.spClient.Next(ctx)
 }
 
 func (c *Client) Previous(ctx context.Context) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.spClient.Previous(ctx)
 }
 
 func (c *Client) Seek(ctx context.Context, positionMs int) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.spClient.Seek(ctx, positionMs)
 }
 
 func (c *Client) SetVolume(ctx context.Context, percent int) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	if percent < 0 {
 		percent = 0
 	}
@@ -911,14 +1085,10 @@ func (c *Client) SetVolume(ctx context.Context, percent int) error {
 }
 
 func (c *Client) ToggleShuffle(ctx context.Context, current bool) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.spClient.Shuffle(ctx, !current)
 }
 
 func (c *Client) CycleRepeat(ctx context.Context, current string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	var next string
 	switch current {
 	case "off":
@@ -933,10 +1103,7 @@ func (c *Client) CycleRepeat(ctx context.Context, current string) error {
 
 // EnsureActiveDevice looks for an active device, or transfers to spotumn/available device
 func (c *Client) EnsureActiveDevice(ctx context.Context) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	devices, err := c.spClient.PlayerDevices(ctx)
+	devices, err := c.GetDevices(ctx)
 	if err != nil {
 		return err
 	}
@@ -962,16 +1129,17 @@ func (c *Client) EnsureActiveDevice(ctx context.Context) error {
 	return nil
 }
 
-// DefaultToSpotumnDevice ensures spotumn is activated as the playback device on startup
+// DefaultToSpotumnDevice ensures spotumn is activated as the playback device unless another device is actively playing
 func (c *Client) DefaultToSpotumnDevice(ctx context.Context) error {
-	c.mu.Lock()
-	c.explicitRemote = false
-	c.mu.Unlock()
+	state, err := c.spClient.PlayerState(ctx)
+	if err == nil && state != nil && state.Device.ID != "" {
+		if state.Playing || state.Device.Active {
+			return nil
+		}
+	}
 
 	spotumnID := c.findSpotumnDeviceID(ctx)
 	if spotumnID != "" {
-		c.mu.RLock()
-		defer c.mu.RUnlock()
 		return c.spClient.TransferPlayback(ctx, spotumnID, false)
 	}
 	return nil
@@ -979,9 +1147,6 @@ func (c *Client) DefaultToSpotumnDevice(ctx context.Context) error {
 
 // GetCurrentUser returns the user's Spotify display name and user ID
 func (c *Client) GetCurrentUser(ctx context.Context) (displayName, userID string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	user, err := c.spClient.CurrentUser(ctx)
 	if err != nil || user == nil {
 		return "spotumn", ""
@@ -995,9 +1160,6 @@ func (c *Client) GetCurrentUser(ctx context.Context) (displayName, userID string
 
 // GetTasteRecommendations fetches algorithmic recommendations based on listening trends
 func (c *Client) GetTasteRecommendations(ctx context.Context) ([]Track, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var seedIDs []spotify.ID
 	top, err := c.spClient.CurrentUsersTopTracks(ctx, spotify.Limit(5))
 	if err == nil && top != nil {
@@ -1023,10 +1185,7 @@ func (c *Client) GetTasteRecommendations(ctx context.Context) ([]Track, error) {
 
 // GetRecentlyPlayed fetches recently played tracks from Spotify
 func (c *Client) GetRecentlyPlayed(ctx context.Context) ([]Track, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	recent, err := c.spClient.PlayerRecentlyPlayed(ctx)
+	recent, err := c.spClient.PlayerRecentlyPlayedOpt(ctx, &spotify.RecentlyPlayedOptions{Limit: 50})
 	if err != nil || recent == nil {
 		return nil, err
 	}
@@ -1037,7 +1196,7 @@ func (c *Client) GetRecentlyPlayed(ctx context.Context) ([]Track, error) {
 		if item.Track.ID != "" && !seen[string(item.Track.ID)] {
 			seen[string(item.Track.ID)] = true
 			tracks = append(tracks, extractSimpleTrack(&item.Track))
-			if len(tracks) >= 20 {
+			if len(tracks) >= 30 {
 				break
 			}
 		}
@@ -1047,9 +1206,6 @@ func (c *Client) GetRecentlyPlayed(ctx context.Context) ([]Track, error) {
 
 // QueueSong adds a song directly to Spotify's queue
 func (c *Client) QueueSong(ctx context.Context, trackURI string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	id := extractTrackID(trackURI)
 	if id == "" {
 		return nil
@@ -1059,12 +1215,8 @@ func (c *Client) QueueSong(ctx context.Context, trackURI string) error {
 
 // PlayTrackAtPosition starts playback of a track at a specific timestamp (positionMs)
 func (c *Client) PlayTrackAtPosition(ctx context.Context, trackURI, contextURI string, positionMs int) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	opts := &spotify.PlayOptions{
 		PositionMs: spotify.Numeric(positionMs),
-		DeviceID:   c.getTargetDeviceID(ctx),
 	}
 
 	if contextURI != "" && !strings.Contains(contextURI, "collection") {
@@ -1079,6 +1231,12 @@ func (c *Client) PlayTrackAtPosition(ctx context.Context, trackURI, contextURI s
 	}
 
 	err := c.spClient.PlayOpt(ctx, opts)
+	if err != nil && (strings.Contains(err.Error(), "No active device") || strings.Contains(err.Error(), "404")) {
+		if devID := c.getTargetDeviceID(ctx); devID != nil {
+			opts.DeviceID = devID
+			err = c.spClient.PlayOpt(ctx, opts)
+		}
+	}
 	if err == nil && positionMs > 0 {
 		_ = c.spClient.Seek(ctx, positionMs)
 	}
@@ -1103,7 +1261,7 @@ func (c *Client) SaveLastState(ps *PlaybackState) {
 	if err != nil {
 		return
 	}
-	path := filepath.Join(config.GetDir(), "last_state.json")
+	path := filepath.Join(config.GetCacheDir(), "last_state.json")
 	_ = os.WriteFile(path, data, 0600)
 }
 
@@ -1116,7 +1274,7 @@ func (c *Client) GetLastSavedState() *PlaybackState {
 
 // LoadLastState retrieves the last known playback state from disk
 func (c *Client) LoadLastState() *PlaybackState {
-	path := filepath.Join(config.GetDir(), "last_state.json")
+	path := filepath.Join(config.GetCacheDir(), "last_state.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -1127,8 +1285,12 @@ func (c *Client) LoadLastState() *PlaybackState {
 	}
 	// Always default device back to spotumn on startup
 	ps.DeviceName = "spotumn"
-	ps.DeviceID = ""
 	c.mu.Lock()
+	if c.localDeviceID != "" {
+		ps.DeviceID = c.localDeviceID
+	} else {
+		ps.DeviceID = ""
+	}
 	c.lastState = &ps
 	c.mu.Unlock()
 	return &ps

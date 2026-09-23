@@ -7,14 +7,14 @@
 
 set -euo pipefail
 
-# ANSI color codes (Catppuccin Mocha aesthetic)
+# Adaptive ANSI color codes (High contrast & readable in both light and dark terminal modes)
 CLR_RESET="\033[0m"
 CLR_BOLD="\033[1m"
-CLR_LAVENDER="\033[38;2;180;190;254m"
-CLR_GREEN="\033[38;2;166;227;161m"
-CLR_PEACH="\033[38;2;250;179;135m"
-CLR_RED="\033[38;2;243;139;168m"
-CLR_SUBTEXT="\033[38;2;166;173;200m"
+CLR_LAVENDER="\033[1;34m"
+CLR_GREEN="\033[1;32m"
+CLR_PEACH="\033[1;33m"
+CLR_RED="\033[1;31m"
+CLR_SUBTEXT="\033[2m"
 
 log_info() {
     echo -e "${CLR_LAVENDER}${CLR_BOLD}==>${CLR_RESET} ${CLR_BOLD}$1${CLR_RESET}"
@@ -44,7 +44,7 @@ cat << 'EOF'
  |___/ .__/ \___/ \__|\__,_|_| |_| |_|_| |_|
      |_|                                    
 EOF
-echo -e "${CLR_SUBTEXT}   Spotify TUI Client (Compiling from Source)${CLR_RESET}\n"
+echo -e "${CLR_RESET}${CLR_SUBTEXT}   Spotify TUI Client (Compiling from Source)${CLR_RESET}\n"
 
 # Parse command line options
 BUILD_EDITION=""
@@ -131,12 +131,7 @@ if [ "$BUILD_EDITION" = "full" ]; then
     fi
 fi
 
-# Check librespot availability (optional but recommended)
-if command -v librespot >/dev/null 2>&1 || [ -f "/usr/sbin/librespot" ]; then
-    log_success "Found librespot daemon on system"
-else
-    log_warn "librespot not found in PATH or /usr/sbin. (Optional: install librespot for integrated Spotify Connect playback)"
-fi
+log_success "Embedded native Spotify Connect player engine enabled"
 
 # 3. Determine target install directory
 PREFIX="${PREFIX:-}"
@@ -165,10 +160,10 @@ go mod download
 TARGET_BIN="${BUILD_TMP}/spotumn"
 if [ "$BUILD_EDITION" = "minimal" ]; then
     log_info "Compiling spotumn (Minimal: ANSI only)..."
-    CGO_ENABLED=0 go build -tags minimal -trimpath -ldflags="-s -w" -o "$TARGET_BIN" ./cmd/spotumn
+    go build -tags minimal -trimpath -ldflags="-s -w" -o "$TARGET_BIN" ./cmd/spotumn
 else
     log_info "Compiling spotumn (Full: Chafa + ANSI)..."
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$TARGET_BIN" ./cmd/spotumn
+    go build -trimpath -ldflags="-s -w" -o "$TARGET_BIN" ./cmd/spotumn
 fi
 log_success "Compilation successful"
 
@@ -187,10 +182,23 @@ if [ ! -f "$CONFIG_FILE" ]; then
     cat > "$CONFIG_FILE" << 'EOF'
 # spotumn configuration
 # port: 8989
-# art_renderer: auto # auto, image, ansi
+# art_renderer: auto # auto, ansi
+# theme: spotify
 EOF
     chmod 0600 "$CONFIG_FILE"
     log_success "Created config template at ${CONFIG_FILE} (mode 0600)"
+fi
+
+# 7. Install themes and example theme
+THEMES_DIR="${CONFIG_DIR}/themes"
+mkdir -p "$THEMES_DIR"
+chmod 0700 "$THEMES_DIR"
+
+if [ -d "${SCRIPT_DIR}/themes" ]; then
+    cp -n "${SCRIPT_DIR}/themes"/*.json "$THEMES_DIR"/ 2>/dev/null || cp "${SCRIPT_DIR}/themes"/*.json "$THEMES_DIR"/
+    cp "${SCRIPT_DIR}/themes/example_theme.txt" "$THEMES_DIR"/ 2>/dev/null || true
+    chmod 0600 "$THEMES_DIR"/* 2>/dev/null || true
+    log_success "Installed preset themes and example to ${THEMES_DIR}"
 fi
 
 echo ""
@@ -207,4 +215,12 @@ fi
 echo -e "Ready to use!"
 echo -e "  • Works out of the box with public Spotify Connect client ID"
 echo -e "  • Launch ${CLR_LAVENDER}spotumn${CLR_RESET} to start listening!"
+echo ""
+echo -e "${CLR_BOLD}Custom Colorscheme Tip:${CLR_RESET}"
+echo -e "  Spotumn includes a multi-theme JSON engine supporting both dark & light palettes."
+echo -e "  • Presets: ${CLR_LAVENDER}spotify, catppuccin, dracula, gruvbox, monochrome, tokyonight${CLR_RESET}"
+echo -e "  • Press ${CLR_BOLD}\`${CLR_RESET} (backtick) inside spotumn to open ${CLR_BOLD}Settings${CLR_RESET} and cycle themes live."
+echo -e "  • To create your own theme, see ${CLR_LAVENDER}~/.config/spotumn/themes/example_theme.txt${CLR_RESET}:"
+echo -e "      ${CLR_SUBTEXT}cp ~/.config/spotumn/themes/example_theme.txt ~/.config/spotumn/themes/custom.json${CLR_RESET}"
+echo -e "    Edit the colors, and it will be validated and available in Settings automatically."
 echo ""

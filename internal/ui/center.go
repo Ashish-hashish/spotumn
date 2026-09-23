@@ -26,6 +26,7 @@ func RenderCenterLines(
 	selectedIndex int,
 	focused bool,
 	width, height int,
+	containerURI ...string,
 ) []string {
 	if width < 20 {
 		width = 20
@@ -54,7 +55,11 @@ func RenderCenterLines(
 	var bodyLines []string
 	switch currentTab {
 	case TabTracks:
-		bodyLines = renderTracks(tracks, albums, artists, playlistName, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
+		var curURI string
+		if len(containerURI) > 0 {
+			curURI = containerURI[0]
+		}
+		bodyLines = renderTracks(tracks, albums, artists, playlistName, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH, curURI)
 	case TabHistory:
 		bodyLines = renderHistory(history, currentPlayingTrackURI, selectedIndex, focused && !searchFocused, width, bodyH)
 	case TabLyrics:
@@ -90,14 +95,20 @@ func RenderCenter(
 	selectedIndex int,
 	focused bool,
 	width, height int,
+	containerURI ...string,
 ) string {
 	contentW := width - 2
-	if contentW < 8 {
-		contentW = 8
-	}
 	contentH := height - 2
-	if contentH < 1 {
-		contentH = 1
+	if contentW < 10 {
+		contentW = 10
+	}
+	if contentH < 3 {
+		contentH = 3
+	}
+
+	var curURI string
+	if len(containerURI) > 0 {
+		curURI = containerURI[0]
 	}
 
 	lines := RenderCenterLines(
@@ -117,6 +128,7 @@ func RenderCenter(
 		focused,
 		contentW,
 		contentH,
+		curURI,
 	)
 
 	boxStyle := PanelBox(focused, width, height)
@@ -226,6 +238,7 @@ func renderTrackRow(idx int, t backend.Track, isSelected bool, isPlaying bool, f
 
 // renderAlbumRow renders a single album row in an artist's discography section
 func renderAlbumRow(idx int, a backend.Playlist, isSelected bool, focused bool, titleW, descW, countW int, width int) string {
+	numCol := PadPlain(fmt.Sprintf("%2d", idx+1), 4)
 	iconCol := " 💿 "
 	titleCol := PadPlain(a.Name, titleW)
 	descCol := PadPlain(a.OwnerID, descW)
@@ -238,7 +251,7 @@ func renderAlbumRow(idx int, a backend.Playlist, isSelected bool, focused bool, 
 	}
 	countCol := PadPlain(countStr, countW)
 
-	rawRow := iconCol + titleCol + descCol + countCol
+	rawRow := numCol + iconCol + titleCol + descCol + countCol
 
 	if isSelected && focused {
 		return RenderPaddedLine(rawRow, StyleActiveFocusedBlock, width)
@@ -246,12 +259,13 @@ func renderAlbumRow(idx int, a backend.Playlist, isSelected bool, focused bool, 
 		return RenderPaddedLine(rawRow, StyleActiveUnfocusedBlock, width)
 	}
 
+	numStyled := StyleFaint.Render(numCol)
 	iconStyled := StyleLavender.Render(iconCol)
 	titleStyled := StyleBold.Render(titleCol)
 	descStyled := StylePeach.Render(descCol)
 	countStyled := StyleFaint.Render(countCol)
 
-	rowContent := iconStyled + titleStyled + descStyled + countStyled
+	rowContent := numStyled + iconStyled + titleStyled + descStyled + countStyled
 	return PadToWidth(rowContent, width)
 }
 
@@ -312,6 +326,7 @@ func renderPlaylistHeader(title string, totalMs int, trackCount int, width int) 
 
 // renderArtistRow renders a single artist row in search results
 func renderArtistRow(idx int, a backend.Playlist, isSelected bool, focused bool, nameW, typeW, popW int, width int) string {
+	numCol := PadPlain(fmt.Sprintf("%2d", idx+1), 4)
 	iconCol := " 󰠃 "
 	nameCol := PadPlain(a.Name, nameW)
 	typeCol := PadPlain(a.OwnerID, typeW)
@@ -322,7 +337,7 @@ func renderArtistRow(idx int, a backend.Playlist, isSelected bool, focused bool,
 	}
 	popCol := PadPlain(popStr, popW)
 
-	rawRow := iconCol + nameCol + typeCol + popCol
+	rawRow := numCol + iconCol + nameCol + typeCol + popCol
 
 	if isSelected && focused {
 		return RenderPaddedLine(rawRow, StyleActiveFocusedBlock, width)
@@ -330,12 +345,13 @@ func renderArtistRow(idx int, a backend.Playlist, isSelected bool, focused bool,
 		return RenderPaddedLine(rawRow, StyleActiveUnfocusedBlock, width)
 	}
 
+	numStyled := StyleFaint.Render(numCol)
 	iconStyled := StylePeach.Render(iconCol)
 	nameStyled := StyleBold.Render(nameCol)
 	typeStyled := StyleLavender.Render(typeCol)
 	popStyled := StyleFaint.Render(popCol)
 
-	rowContent := iconStyled + nameStyled + typeStyled + popStyled
+	rowContent := numStyled + iconStyled + nameStyled + typeStyled + popStyled
 	return PadToWidth(rowContent, width)
 }
 
@@ -349,7 +365,13 @@ func renderTracks(
 	selectedIndex int,
 	focused bool,
 	width, height int,
+	containerURI ...string,
 ) []string {
+	var curContainerURI string
+	if len(containerURI) > 0 {
+		curContainerURI = containerURI[0]
+	}
+
 	if len(tracks) == 0 && len(albums) == 0 && len(artists) == 0 {
 		var lines []string
 		title := "Tracks"
@@ -421,8 +443,12 @@ func renderTracks(
 		if len(tracks) > 0 {
 			allVisualLines = append(allVisualLines, PadToWidth("", tableW))
 			subHeader := "  ♪ Top Tracks"
+			isAlbumView := strings.HasPrefix(curContainerURI, "spotify:album:") ||
+				(len(tracks) > 0 && tracks[0].Artist != "" && !strings.EqualFold(strings.TrimSpace(playlistName), strings.TrimSpace(tracks[0].Artist)) && !strings.HasPrefix(curContainerURI, "spotify:artist:"))
 			if strings.HasPrefix(playlistName, "Search:") {
 				subHeader = "  ♪ Songs"
+			} else if isAlbumView {
+				subHeader = "  ♪ Tracks"
 			}
 			allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render(subHeader), tableW))
 			headerNum := PadPlain(" #", numW)
@@ -446,22 +472,36 @@ func renderTracks(
 
 		// Albums Section
 		if len(albums) > 0 {
+			numW := 4
 			iconW := 4
 			countW := 12
-			remAlbW := tableW - iconW - countW - 2
+			remAlbW := tableW - numW - iconW - countW - 2
 			if remAlbW < 12 {
 				remAlbW = 12
 			}
 			albTitleW := remAlbW * 55 / 100
 			albDescW := remAlbW - albTitleW
 
+			isAlbumView := strings.HasPrefix(curContainerURI, "spotify:album:") ||
+				(len(tracks) > 0 && tracks[0].Artist != "" && !strings.EqualFold(strings.TrimSpace(playlistName), strings.TrimSpace(tracks[0].Artist)) && !strings.HasPrefix(curContainerURI, "spotify:artist:"))
+
 			allVisualLines = append(allVisualLines, PadToWidth("", tableW))
 			albSubHeader := "  💿 Albums & Discography"
 			if strings.HasPrefix(playlistName, "Search:") {
 				albSubHeader = "  💿 Albums"
+			} else if isAlbumView {
+				artistName := ""
+				if len(tracks) > 0 && tracks[0].Artist != "" {
+					artistName = tracks[0].Artist
+				}
+				if artistName != "" {
+					albSubHeader = fmt.Sprintf("  💿 More from %s", artistName)
+				} else {
+					albSubHeader = "  💿 More from this Artist"
+				}
 			}
 			allVisualLines = append(allVisualLines, PadToWidth(StyleLavender.Render(albSubHeader), tableW))
-			albHeader := StyleFaint.Render("    " + PadPlain("Album", albTitleW) + PadPlain("Type • Year", albDescW) + PadPlain("Tracks", countW))
+			albHeader := StyleFaint.Render(PadPlain(" #", numW) + "    " + PadPlain("Album", albTitleW) + PadPlain("Type • Year", albDescW) + PadPlain("Tracks", countW))
 			allVisualLines = append(allVisualLines, PadToWidth(albHeader, tableW))
 			allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", tableW)), tableW))
 
@@ -478,9 +518,10 @@ func renderTracks(
 
 		// Artists Section
 		if len(artists) > 0 {
+			numW := 4
 			iconW := 4
 			popW := 12
-			remArtW := tableW - iconW - popW - 2
+			remArtW := tableW - numW - iconW - popW - 2
 			if remArtW < 12 {
 				remArtW = 12
 			}
@@ -489,7 +530,7 @@ func renderTracks(
 
 			allVisualLines = append(allVisualLines, PadToWidth("", tableW))
 			allVisualLines = append(allVisualLines, PadToWidth(StylePeach.Render("  󰠃 Artists"), tableW))
-			artHeader := StyleFaint.Render("    " + PadPlain("Artist", artNameW) + PadPlain("Type", artTypeW) + PadPlain("Popularity", popW))
+			artHeader := StyleFaint.Render(PadPlain(" #", numW) + "    " + PadPlain("Artist", artNameW) + PadPlain("Type", artTypeW) + PadPlain("Popularity", popW))
 			allVisualLines = append(allVisualLines, PadToWidth(artHeader, tableW))
 			allVisualLines = append(allVisualLines, PadToWidth(StyleFaint.Render(strings.Repeat("─", tableW)), tableW))
 
@@ -687,14 +728,74 @@ func renderHistory(
 	return lines
 }
 
-// renderLyrics renders synchronized lyrics with colored block active highlight
+// renderLyrics renders synchronized lyrics or unsynced plain lyrics with pointer navigation
 func renderLyrics(lines []lyrics.Line, cursorLine int, progressMs int, focused bool, width, height int) []string {
 	var output []string
 
 	if len(lines) == 0 {
-		msg := StyleFaint.Render("No synced lyrics found for this track")
+		msg := StyleFaint.Render("No lyrics found for this track")
 		output = append(output, PadToWidth("", width))
 		output = append(output, PadToWidth(BgPad(2)+msg, width))
+		return output
+	}
+
+	isSynced := false
+	for _, l := range lines {
+		if l.TimeMs > 0 {
+			isSynced = true
+			break
+		}
+	}
+
+	if !isSynced {
+		output = append(output, PadToWidth(BgPad(2)+StyleFaint.Render("[Lyrics not synced]"), width))
+		height--
+		if height < 1 {
+			height = 1
+		}
+
+		targetCenter := cursorLine
+		if targetCenter < 0 {
+			targetCenter = 0
+		}
+		if targetCenter >= len(lines) {
+			targetCenter = len(lines) - 1
+		}
+
+		halfHeight := height / 2
+		startIdx := targetCenter - halfHeight
+		if startIdx < 0 {
+			startIdx = 0
+		}
+
+		for i := 0; i < height; i++ {
+			idx := startIdx + i
+			if idx >= len(lines) {
+				output = append(output, PadToWidth("", width))
+				continue
+			}
+
+			line := lines[idx]
+			text := line.Text
+			if text == "" {
+				text = "♪"
+			}
+
+			maxLyricW := width - 6
+			if maxLyricW < 4 {
+				maxLyricW = 4
+			}
+			text = TruncateString(text, maxLyricW)
+
+			isCursor := idx == cursorLine
+			var lineRendered string
+			if isCursor {
+				lineRendered = RenderPaddedLine("  ❯  "+text, StyleActiveFocusedBlock, width)
+			} else {
+				lineRendered = PadToWidth(BgPad(5)+StyleFaint.Render(text), width)
+			}
+			output = append(output, lineRendered)
+		}
 		return output
 	}
 
@@ -727,15 +828,19 @@ func renderLyrics(lines []lyrics.Line, cursorLine int, progressMs int, focused b
 			text = "♪"
 		}
 
+		maxLyricW := width - 6
+		if maxLyricW < 4 {
+			maxLyricW = 4
+		}
+		text = TruncateString(text, maxLyricW)
+
 		isSinging := idx == activeIdx
 		isCursor := idx == cursorLine
 
 		var lineRendered string
 		if isSinging {
-			// Solid Mint colored block for active singing lyric with dark contrasting text
 			lineRendered = RenderPaddedLine("  ❯  "+text, StyleActiveLyricsBlock, width)
 		} else if isCursor && focused {
-			// Subtle Purple colored block for manual cursor navigation
 			lineRendered = RenderPaddedLine("  ➜  "+text, StyleActiveFocusedBlock, width)
 		} else {
 			lineRendered = PadToWidth(BgPad(5)+StyleFaint.Render(text), width)

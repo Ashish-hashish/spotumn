@@ -9,10 +9,26 @@ import (
 	"github.com/zmb3/spotify/v2"
 )
 
+// DeviceTypeGlyph returns a Nerd Font icon based on device type
+func DeviceTypeGlyph(devType string) string {
+	switch strings.ToLower(devType) {
+	case "computer":
+		return "󰍹 "
+	case "smartphone", "phone":
+		return "󰄡 "
+	case "speaker":
+		return "󰓃 "
+	case "cast", "castaudio", "castvideo":
+		return "󰋋 "
+	default:
+		return "󰓃 "
+	}
+}
+
 // RenderDevicesModal renders an interactive Spotify Connect devices selection window
 func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScanning bool, width, height int) string {
 	devices = backend.SortDevicesWithSpotumnFirst(devices)
-	modalW := 56
+	modalW := 58
 	if modalW > width-4 {
 		modalW = width - 4
 	}
@@ -53,8 +69,9 @@ func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScann
 			if devType == "" {
 				devType = "Speaker"
 			}
+			glyph := DeviceTypeGlyph(devType)
 
-			line := fmt.Sprintf("%s%s (%s)%s", prefix, d.Name, devType, activeTag)
+			line := fmt.Sprintf("%s%s%s (%s)%s", prefix, glyph, d.Name, devType, activeTag)
 			truncLine := TruncateString(line, modalW-4)
 
 			if isSelected {
@@ -68,9 +85,9 @@ func RenderDevicesModal(devices []spotify.PlayerDevice, selectedIdx int, isScann
 		sb.WriteString(PadToWidth("", modalW-2) + "\n")
 	}
 
-	footer := StyleFaint.Render("  [Enter] Select   [r] Rescan   [d/Esc] Close")
+	footer := StyleFaint.Render("  ⌜Enter⌟ Select   ⌜r⌟ Rescan   ⌜Esc / d⌟ Close")
 	if isScanning {
-		footer = StyleFaint.Render("  [Enter] Select   ") + StyleMint.Render("[r] Scanning...") + StyleFaint.Render("   [d/Esc] Close")
+		footer = StyleFaint.Render("  ⌜Enter⌟ Select   ") + StyleMint.Render("⌜r⌟ Scanning...") + StyleFaint.Render("   ⌜Esc / d⌟ Close")
 	}
 	sb.WriteString(PadToWidth(footer, modalW-2) + "\n")
 

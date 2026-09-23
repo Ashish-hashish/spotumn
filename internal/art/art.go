@@ -20,18 +20,19 @@ import (
 )
 
 type Renderer struct {
-	client    *http.Client
-	cacheDir  string
-	mode      string
-	hasChafa  bool
-	memCache  map[string]string
-	diskCache map[string]string
-	cacheKeys []string
-	mu        sync.Mutex
+	client        *http.Client
+	cacheDir      string
+	mode          string
+	hasChafa      bool
+	memCache      map[string]string
+	diskCache     map[string]string
+	cacheKeys     []string
+	diskCacheKeys []string
+	mu            sync.Mutex
 }
 
 func NewRenderer(mode string) *Renderer {
-	cacheDir := filepath.Join(config.GetDir(), "art_cache")
+	cacheDir := filepath.Join(config.GetCacheDir(), "art")
 	_ = os.MkdirAll(cacheDir, 0700)
 
 	hasChafa := false
@@ -49,11 +50,13 @@ func NewRenderer(mode string) *Renderer {
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
-		cacheDir:  cacheDir,
-		mode:      strings.ToLower(strings.TrimSpace(mode)),
-		hasChafa:  hasChafa,
-		memCache:  make(map[string]string, 20),
-		diskCache: make(map[string]string, 20),
+		cacheDir:      cacheDir,
+		mode:          strings.ToLower(strings.TrimSpace(mode)),
+		hasChafa:      hasChafa,
+		memCache:      make(map[string]string, 4),
+		diskCache:     make(map[string]string, 50),
+		cacheKeys:     make([]string, 0, 4),
+		diskCacheKeys: make([]string, 0, 50),
 	}
 }
 
@@ -93,16 +96,21 @@ func (r *Renderer) Render(imageURL string, width, height int) (string, string, e
 	}
 
 	r.mu.Lock()
-	if len(r.cacheKeys) >= 20 {
+	if len(r.cacheKeys) >= 4 {
 		oldest := r.cacheKeys[0]
 		r.cacheKeys = r.cacheKeys[1:]
 		delete(r.memCache, oldest)
 	}
-	if len(r.diskCache) >= 20 {
-		r.diskCache = make(map[string]string, 20)
+	if len(r.diskCacheKeys) >= 50 {
+		oldestURL := r.diskCacheKeys[0]
+		r.diskCacheKeys = r.diskCacheKeys[1:]
+		delete(r.diskCache, oldestURL)
 	}
 	r.memCache[key] = rendered
-	r.diskCache[imageURL] = diskPath
+	if _, exists := r.diskCache[imageURL]; !exists {
+		r.diskCache[imageURL] = diskPath
+		r.diskCacheKeys = append(r.diskCacheKeys, imageURL)
+	}
 	r.cacheKeys = append(r.cacheKeys, key)
 	r.mu.Unlock()
 

@@ -37,11 +37,12 @@ type lrclibItem struct {
 	PlainLyrics  string `json:"plainLyrics"`
 }
 
-// FetchSyncedLyrics fetches and parses synced lyrics from LRCLib with search fallback
-func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec int) ([]Line, error) {
+// FetchSyncedLyrics fetches and parses synced lyrics from LRCLib with search fallback.
+// Returns lines, whether the lyrics are timestamp-synced, and any error.
+func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec int) ([]Line, bool, error) {
 	trackName = cleanTrackName(trackName)
 	if strings.TrimSpace(trackName) == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	// 1. Try exact match lookup first
@@ -51,8 +52,8 @@ func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec i
 		durationSec,
 	)
 
-	if lines := p.fetchFromURL(u, false); len(lines) > 0 {
-		return lines, nil
+	if lines, synced := p.fetchFromURL(u, false); len(lines) > 0 {
+		return lines, synced, nil
 	}
 
 	// 2. Fallback to flexible search
@@ -61,8 +62,8 @@ func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec i
 		url.QueryEscape(artistName),
 	)
 
-	if lines := p.fetchFromURL(searchURL, true); len(lines) > 0 {
-		return lines, nil
+	if lines, synced := p.fetchFromURL(searchURL, true); len(lines) > 0 {
+		return lines, synced, nil
 	}
 
 	// 3. Fallback to query by track name only if artist name has multiple/featured artists
@@ -70,24 +71,25 @@ func (p *Provider) FetchSyncedLyrics(trackName, artistName string, durationSec i
 		url.QueryEscape(trackName+" "+artistName),
 	)
 
-	return p.fetchFromURL(generalSearchURL, true), nil
+	lines, synced := p.fetchFromURL(generalSearchURL, true)
+	return lines, synced, nil
 }
 
-func (p *Provider) fetchFromURL(targetURL string, isArray bool) []Line {
+func (p *Provider) fetchFromURL(targetURL string, isArray bool) ([]Line, bool) {
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	req.Header.Set("User-Agent", "spotumn/1.0.0")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil
+		return nil, false
 	}
 
 	limitReader := io.LimitReader(resp.Body, 512*1024)
@@ -95,36 +97,36 @@ func (p *Provider) fetchFromURL(targetURL string, isArray bool) []Line {
 	if isArray {
 		var items []lrclibItem
 		if err := json.NewDecoder(limitReader).Decode(&items); err != nil {
-			return nil
+			return nil, false
 		}
 		for _, item := range items {
 			if item.SyncedLyrics != "" {
-				return parseLRC(item.SyncedLyrics)
+				return parseLRC(item.SyncedLyrics), true
 			}
 		}
 		for _, item := range items {
 			if item.PlainLyrics != "" {
-				return parsePlain(item.PlainLyrics)
+				return parsePlain(item.PlainLyrics), false
 			}
 		}
-		return nil
+		return nil, false
 	}
 
 	var item lrclibItem
 	if err := json.NewDecoder(limitReader).Decode(&item); err != nil {
-		return nil
+		return nil, false
 	}
 	return extractItemLyrics(item)
 }
 
-func extractItemLyrics(item lrclibItem) []Line {
+func extractItemLyrics(item lrclibItem) ([]Line, bool) {
 	if item.SyncedLyrics != "" {
-		return parseLRC(item.SyncedLyrics)
+		return parseLRC(item.SyncedLyrics), true
 	}
 	if item.PlainLyrics != "" {
-		return parsePlain(item.PlainLyrics)
+		return parsePlain(item.PlainLyrics), false
 	}
-	return nil
+	return nil, false
 }
 
 func cleanTrackName(name string) string {

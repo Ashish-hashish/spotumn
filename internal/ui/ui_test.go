@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"spotumn/internal/backend"
+	"spotumn/internal/lyrics"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/zmb3/spotify/v2"
-	"spotumn/internal/backend"
-	"spotumn/internal/lyrics"
 )
 
 func TestFormatDuration(t *testing.T) {
@@ -47,15 +48,15 @@ func TestTruncateAndPad(t *testing.T) {
 
 func TestRenderFullUI(t *testing.T) {
 	params := ViewParams{
-		Width:        120,
-		Height:       36,
-		Focused:      PaneNav,
+		Width:            120,
+		Height:           36,
+		Focused:          PaneNav,
 		CurrentTab:       TabTracks,
 		ShowLeftSidebar:  true,
 		ShowRightSidebar: true,
-		NavIndex:     0,
-		CenterIndex:  0,
-		QueueIndex:   0,
+		NavIndex:         0,
+		CenterIndex:      0,
+		QueueIndex:       0,
 		Playlists: []backend.Playlist{
 			{ID: "1", Name: "Chill Mix", TrackCount: 42},
 			{ID: "2", Name: "Rock Classics", TrackCount: 88},
@@ -148,8 +149,8 @@ func TestRenderZenMode(t *testing.T) {
 	if !strings.Contains(strippedBoth, "❯  Zen active singing line  ❮") {
 		t.Error("expected centered active singing markers ❯ ... ❮ in ZenViewBoth")
 	}
-	if !strings.Contains(strippedBoth, "◖v◗") {
-		t.Error("view toggle keybind ◖v◗ missing from bottom border")
+	if !strings.Contains(strippedBoth, "⌜v⌟") {
+		t.Error("view toggle keybind ⌜v⌟ missing from bottom border")
 	}
 
 	// Test navigation cursor rendering in Zen mode
@@ -312,8 +313,8 @@ func TestBordersAndIcons(t *testing.T) {
 
 	// Bottom border check: keybinds embedded inside the bottom frame
 	stripped := ansi.Strip(output)
-	if !strings.Contains(stripped, "◖Space◗ Play") {
-		t.Errorf("expected '◖Space◗ Play' keybind embedded in bottom border, got: %s", stripped)
+	if !strings.Contains(stripped, "⌜Space⌟ Play") {
+		t.Errorf("expected '⌜Space⌟ Play' keybind embedded in bottom border, got: %s", stripped)
 	}
 
 	// Test with empty username
@@ -352,8 +353,8 @@ func TestTrackRowBlockHighlight(t *testing.T) {
 
 func TestRenderDevicesModal(t *testing.T) {
 	modal := RenderDevicesModal(nil, 0, false, 80, 24)
-	if !strings.Contains(modal, "[r] Rescan") {
-		t.Error("expected [r] Rescan hint in devices modal")
+	if !strings.Contains(modal, "⌜r⌟ Rescan") {
+		t.Error("expected ⌜r⌟ Rescan hint in devices modal")
 	}
 
 	modalScanning := RenderDevicesModal(nil, 0, true, 80, 24)
@@ -690,8 +691,9 @@ func TestLyricsAutoSyncTimer(t *testing.T) {
 	}
 
 	m := &AppModel{
-		lyricsLines: lyricsLines,
-		client:      &backend.Client{},
+		lyricsLines:  lyricsLines,
+		lyricsSynced: true,
+		client:       &backend.Client{},
 		playback: &backend.PlaybackState{
 			Playing:    false, // keep false to avoid periodic save network/disk writes in test
 			ProgressMs: 12000, // activeIdx is 1 ("Second line")
@@ -892,9 +894,9 @@ func TestTotalDurationOnPlaylistHeader(t *testing.T) {
 
 func TestEscClosesZenMode(t *testing.T) {
 	app := &AppModel{
-		zenMode:     true,
-		currentTab:  TabTracks,
-		keyManager:  NewKeyManager(),
+		zenMode:    true,
+		currentTab: TabTracks,
+		keyManager: NewKeyManager(),
 	}
 
 	// Press Esc
@@ -1342,3 +1344,430 @@ func TestScrollbarDoesNotInterfereOrTruncate(t *testing.T) {
 		t.Error("expected scrollbar to be rendered for 30 tracks")
 	}
 }
+
+func TestAlbumAndArtistNumberingInCenter(t *testing.T) {
+	SetTheme(true)
+	albums := []backend.Playlist{
+		{ID: "alb1", Name: "First Album", TrackCount: 10, OwnerID: "Album • 2020"},
+		{ID: "alb2", Name: "Second Album", TrackCount: 12, OwnerID: "Album • 2022"},
+	}
+	artists := []backend.Playlist{
+		{ID: "art1", Name: "First Artist", TrackCount: 88, OwnerID: "Artist"},
+		{ID: "art2", Name: "Second Artist", TrackCount: 92, OwnerID: "Artist"},
+	}
+
+	albRow := renderAlbumRow(0, albums[0], false, false, 20, 15, 10, 80)
+	if !strings.Contains(albRow, " 1") || !strings.Contains(albRow, "First Album") {
+		t.Errorf("expected album row 0 to contain number 1: %s", albRow)
+	}
+
+	artRow := renderArtistRow(1, artists[1], false, false, 20, 10, 10, 80)
+	if !strings.Contains(artRow, " 2") || !strings.Contains(artRow, "Second Artist") {
+		t.Errorf("expected artist row 1 to contain number 2: %s", artRow)
+	}
+
+	// Verify in full search view
+	rendered := RenderFullUI(ViewParams{
+		Width:         100,
+		Height:        30,
+		CurrentTab:    TabTracks,
+		PlaylistName:  "Search: test",
+		ArtistAlbums:  albums,
+		SearchArtists: artists,
+	})
+	stripped := ansi.Strip(rendered)
+	if !strings.Contains(stripped, "First Album") || !strings.Contains(stripped, "Second Artist") {
+		t.Errorf("expected full search view to show albums and artists: %s", stripped)
+	}
+}
+
+func TestNavNumberingForAlbumsAndArtists(t *testing.T) {
+	SetTheme(true)
+	items := []backend.Playlist{
+		{ID: "item1", Name: "First Item", TrackCount: 5},
+		{ID: "item2", Name: "Second Item", TrackCount: 8},
+	}
+
+	// Albums filter should show numbering
+	albumLines := RenderNavLines(items, nil, FilterAlbums, 0, true, 40, 10)
+	albumText := ansi.Strip(strings.Join(albumLines, "\n"))
+	if !strings.Contains(albumText, "1. First Item") || !strings.Contains(albumText, "2. Second Item") {
+		t.Errorf("expected album nav to contain 1. First Item and 2. Second Item: %s", albumText)
+	}
+
+	// Artists filter should show numbering
+	artistLines := RenderNavLines(items, nil, FilterArtists, 0, true, 40, 10)
+	artistText := ansi.Strip(strings.Join(artistLines, "\n"))
+	if !strings.Contains(artistText, "1. First Item") || !strings.Contains(artistText, "2. Second Item") {
+		t.Errorf("expected artist nav to contain 1. First Item and 2. Second Item: %s", artistText)
+	}
+
+	// Playlists filter should not have numbered prefix
+	plLines := RenderNavLines(items, nil, FilterAll, 0, true, 40, 10)
+	plText := ansi.Strip(strings.Join(plLines, "\n"))
+	if strings.Contains(plText, "1. First Item") {
+		t.Errorf("expected standard playlist nav NOT to have numbering prefix: %s", plText)
+	}
+}
+
+func TestAlbumViewMoreFromArtist(t *testing.T) {
+	SetTheme(true)
+	tracks := []backend.Track{
+		{ID: "t1", Name: "Track One", Artist: "Pink Floyd", DurationMs: 240000},
+		{ID: "t2", Name: "Track Two", Artist: "Pink Floyd", DurationMs: 300000},
+	}
+	moreAlbums := []backend.Playlist{
+		{ID: "alb2", URI: "spotify:album:alb2", Name: "The Wall", TrackCount: 26, OwnerID: "Album • 1979"},
+		{ID: "alb3", URI: "spotify:album:alb3", Name: "Wish You Were Here", TrackCount: 5, OwnerID: "Album • 1975"},
+	}
+
+	rendered := RenderFullUI(ViewParams{
+		Width:          100,
+		Height:         35,
+		Focused:        PaneCenter,
+		CurrentTab:     TabTracks,
+		PlaylistName:   "The Dark Side of the Moon",
+		CurrentPlURI:   "spotify:album:alb1",
+		PlaylistTracks: tracks,
+		ArtistAlbums:   moreAlbums,
+	})
+	stripped := ansi.Strip(rendered)
+
+	if !strings.Contains(stripped, "More from Pink Floyd") {
+		t.Errorf("expected 'More from Pink Floyd' section header: %s", stripped)
+	}
+	if !strings.Contains(stripped, "The Wall") || !strings.Contains(stripped, "Wish You Were Here") {
+		t.Errorf("expected other albums to be listed: %s", stripped)
+	}
+	if strings.Contains(stripped, "The Dark Side of the Moon • 19") {
+		t.Errorf("expected current album NOT to be listed in other albums: %s", stripped)
+	}
+}
+
+func TestGlobalFilterKeybindWhenUnfocused(t *testing.T) {
+	m := &AppModel{
+		keyManager:     NewKeyManager(),
+		focused:        PaneCenter,
+		playlistFilter: FilterAll,
+		playlists:      []backend.Playlist{{ID: "p1", Name: "Pl 1"}},
+		albums:         []backend.Playlist{{ID: "a1", Name: "Alb 1"}},
+	}
+
+	// Pressing 'f' while focused on PaneCenter should cycle the filter
+	msg := tea.KeyPressMsg(tea.Key{Code: 'f', Text: "f"})
+	newModel, _ := m.Update(msg)
+	app := newModel.(*AppModel)
+
+	if app.playlistFilter != FilterSpotify {
+		t.Errorf("expected filter to cycle to FilterSpotify (1), got %v", app.playlistFilter)
+	}
+
+	// Press again
+	newModel2, _ := app.Update(msg)
+	app2 := newModel2.(*AppModel)
+	if app2.playlistFilter != FilterByYou {
+		t.Errorf("expected filter to cycle to FilterByYou (2), got %v", app2.playlistFilter)
+	}
+}
+
+func TestSearchIsolationOnNavSelection(t *testing.T) {
+	m := &AppModel{
+		keyManager:    NewKeyManager(),
+		focused:       PaneNav,
+		navIndex:      0,
+		searchFocused: false,
+		searchQuery:   "queen",
+		searchArtists: []backend.Playlist{{ID: "q1", Name: "Queen"}},
+		artistAlbums:  []backend.Playlist{{ID: "a1", Name: "A Night at the Opera"}},
+		playlists:     []backend.Playlist{{ID: "p1", URI: "spotify:playlist:p1", Name: "My Rock"}},
+	}
+
+	// User presses Enter on left sidebar playlist
+	msg := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+	newModel, _ := m.Update(msg)
+	app := newModel.(*AppModel)
+
+	if app.searchArtists != nil {
+		t.Errorf("expected searchArtists to be nil after nav selection, got %v", app.searchArtists)
+	}
+	if app.searchQuery != "" {
+		t.Errorf("expected searchQuery to be cleared after nav selection, got %s", app.searchQuery)
+	}
+	if app.searchFocused {
+		t.Errorf("expected searchFocused to be false after nav selection")
+	}
+
+	// Loading a non-search container via TracksMsg also ensures searchArtists is nil
+	tMsg := TracksMsg{
+		PlaylistURI:  "spotify:playlist:p1",
+		PlaylistName: "My Rock",
+		Tracks:       []backend.Track{{Name: "Bohemian Rhapsody"}},
+	}
+	app.searchArtists = []backend.Playlist{{ID: "leak", Name: "Leaked Artist"}}
+	newModel2, _ := app.Update(tMsg)
+	app2 := newModel2.(*AppModel)
+	if app2.searchArtists != nil {
+		t.Errorf("expected searchArtists to be nil upon TracksMsg for non-search container")
+	}
+}
+
+func TestComplexScriptWidthAndClamping(t *testing.T) {
+	testCases := []struct {
+		name string
+		text string
+	}{
+		{"Hindi/Devanagari", "दुनिया कैसी के प्यार ओओ"},
+		{"Thai", "สวัสดีชาวโลก ทุกคนสบายดีไหม"},
+		{"Khmer", "សួស្តីពិភពលោកទាំងអស់គ្នា"},
+		{"Lao", "ສະບາຍດີຊາວໂລກ ທຸກຄົນສະບາຍດີບໍ"},
+		{"Myanmar", "မင်္ဂလာပါကမ္ဘာလောကကြီး"},
+		{"Tibetan", "བཀྲ་ཤིས་བདེ་ལེགས་ཚང་མར་"},
+		{"Bengali", "কেমন আছেন সবাই ভালো তো"},
+		{"Tamil", "வணக்கம் உலக மக்கள் அனைவரும்"},
+		{"Telugu", "నమస్కారం ప్రపంచానికి స్వాగతం"},
+		{"Arabic", "مَرْحَبًا بِكُمْ جَمِيعًا"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := StringDisplayWidth(tc.text)
+			if w <= 0 {
+				t.Fatalf("expected positive visual width, got %d", w)
+			}
+
+			maxW := 15
+			truncated := TruncateVisualWidth(tc.text, maxW, "")
+			truncW := StringDisplayWidth(truncated)
+			if truncW > maxW {
+				t.Errorf("expected truncated width <= %d, got %d (truncated: %q)", maxW, truncW, truncated)
+			}
+
+			clamped := TruncateString(tc.text, maxW)
+			clampW := StringDisplayWidth(clamped)
+			if clampW > maxW {
+				t.Errorf("expected TruncateString width <= %d, got %d", maxW, clampW)
+			}
+		})
+	}
+}
+
+func TestJSONThemeWithComments(t *testing.T) {
+	jsonWithComments := `
+	// Theme Header Comment
+	{
+		"dark": {
+			"mPrimary": "#1db954", // primary accent
+			"mSurface": "#121212"  /* dark surface */
+		}
+	}
+	`
+	tf, err := ValidateThemeFile([]byte(jsonWithComments))
+	if err != nil {
+		t.Fatalf("expected valid theme parsing with comments, got error: %v", err)
+	}
+	if tf.Dark.MPrimary != "#1db954" {
+		t.Errorf("expected mPrimary #1db954, got %s", tf.Dark.MPrimary)
+	}
+	if tf.Dark.MSurface != "#121212" {
+		t.Errorf("expected mSurface #121212, got %s", tf.Dark.MSurface)
+	}
+}
+
+func TestActionPinInstantReorder(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	playlists := []backend.Playlist{
+		{URI: "spotify:playlist:1", Name: "Alpha", Index: 0},
+		{URI: "spotify:playlist:2", Name: "Beta", Index: 1},
+		{URI: "spotify:playlist:3", Name: "Gamma", Index: 2},
+	}
+
+	app := &AppModel{
+		playlists:  playlists,
+		pinnedURIs: make(map[string]bool),
+		focused:    PaneNav,
+		navIndex:   1, // pointing to "Beta"
+	}
+
+	// 1. Trigger ActionPin on "Beta"
+	app.handleKeyPress(tea.KeyPressMsg{Code: '*'})
+
+	if !app.pinnedURIs["spotify:playlist:2"] {
+		t.Fatal("expected Beta to be in pinnedURIs")
+	}
+	if app.playlists[0].Name != "Beta" {
+		t.Errorf("expected pinned item 'Beta' to immediately move to top (index 0), got %s", app.playlists[0].Name)
+	}
+
+	// 2. Trigger ActionPin again on "Beta" to unpin
+	app.navIndex = 0
+	app.handleKeyPress(tea.KeyPressMsg{Code: '*'})
+
+	if app.pinnedURIs["spotify:playlist:2"] {
+		t.Fatal("expected Beta to be removed from pinnedURIs")
+	}
+	if app.playlists[0].Name != "Alpha" || app.playlists[1].Name != "Beta" {
+		t.Errorf("expected original ordering restored, got %s, %s", app.playlists[0].Name, app.playlists[1].Name)
+	}
+}
+
+func TestPinChronologicalOrdering(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	playlists := []backend.Playlist{
+		{URI: "spotify:playlist:1", Name: "Alpha", Index: 0},
+		{URI: "spotify:playlist:2", Name: "Beta", Index: 1},
+		{URI: "spotify:playlist:3", Name: "Gamma", Index: 2},
+		{URI: "spotify:playlist:4", Name: "Delta", Index: 3},
+	}
+
+	app := &AppModel{
+		playlists:  playlists,
+		pinnedURIs: make(map[string]bool),
+		focused:    PaneNav,
+		navIndex:   1, // Beta
+	}
+
+	// Step 1: Pin Beta
+	app.handleKeyPress(tea.KeyPressMsg{Code: '*'})
+	if len(app.pinnedOrder) != 1 || app.pinnedOrder[0] != "spotify:playlist:2" {
+		t.Fatalf("expected pinnedOrder [Beta], got %v", app.pinnedOrder)
+	}
+	if app.playlists[0].Name != "Beta" {
+		t.Fatalf("expected Beta at index 0, got %s", app.playlists[0].Name)
+	}
+
+	// Step 2: Pin Delta (Delta is at index 3 in current list)
+	for i, pl := range app.playlists {
+		if pl.Name == "Delta" {
+			app.navIndex = i
+			break
+		}
+	}
+	app.handleKeyPress(tea.KeyPressMsg{Code: '*'})
+	// Pins: Beta (oldest), Delta (newest). Old on top, new on bottom!
+	if app.playlists[0].Name != "Beta" {
+		t.Errorf("expected oldest pin Beta at top (index 0), got %s", app.playlists[0].Name)
+	}
+	if app.playlists[1].Name != "Delta" {
+		t.Errorf("expected newer pin Delta at bottom of pins (index 1), got %s", app.playlists[1].Name)
+	}
+	// Unpinned items should follow canonical order: Alpha (index 0), Gamma (index 2)
+	if app.playlists[2].Name != "Alpha" || app.playlists[3].Name != "Gamma" {
+		t.Errorf("expected unpinned items Alpha, Gamma at indices 2, 3; got %s, %s", app.playlists[2].Name, app.playlists[3].Name)
+	}
+
+	// Step 3: Pin Alpha (newest pin)
+	for i, pl := range app.playlists {
+		if pl.Name == "Alpha" {
+			app.navIndex = i
+			break
+		}
+	}
+	app.handleKeyPress(tea.KeyPressMsg{Code: '*'})
+	// Order of pins: Beta (oldest, top), Delta (middle), Alpha (newest, bottom)
+	expectedOrder := []string{"Beta", "Delta", "Alpha", "Gamma"}
+	for i, exp := range expectedOrder {
+		if app.playlists[i].Name != exp {
+			t.Errorf("expected position %d to be %s, got %s", i, exp, app.playlists[i].Name)
+		}
+	}
+
+	// Step 4: Unpin Delta
+	for i, pl := range app.playlists {
+		if pl.Name == "Delta" {
+			app.navIndex = i
+			break
+		}
+	}
+	app.handleKeyPress(tea.KeyPressMsg{Code: '*'})
+	// Remaining pins: Beta (older, top), Alpha (newer, bottom).
+	// Unpinned: Gamma (Index 2), Delta (Index 3).
+	expectedAfterUnpin := []string{"Beta", "Alpha", "Gamma", "Delta"}
+	for i, exp := range expectedAfterUnpin {
+		if app.playlists[i].Name != exp {
+			t.Errorf("after unpinning Delta, expected position %d to be %s, got %s", i, exp, app.playlists[i].Name)
+		}
+	}
+
+	// Step 5: Re-pin Delta (should now be added to bottom of pins)
+	for i, pl := range app.playlists {
+		if pl.Name == "Delta" {
+			app.navIndex = i
+			break
+		}
+	}
+	app.handleKeyPress(tea.KeyPressMsg{Code: '*'})
+	// Pinned: Beta (oldest), Alpha (middle), Delta (newest on bottom)
+	expectedAfterRepin := []string{"Beta", "Alpha", "Delta", "Gamma"}
+	for i, exp := range expectedAfterRepin {
+		if app.playlists[i].Name != exp {
+			t.Errorf("after repinning Delta, expected position %d to be %s, got %s", i, exp, app.playlists[i].Name)
+		}
+	}
+
+	// Step 6: Verify persistence file loading
+	loadedOrder, loadedSet := loadPinned()
+	if len(loadedOrder) != 3 {
+		t.Fatalf("expected 3 loaded pins, got %d", len(loadedOrder))
+	}
+	if loadedOrder[0] != "spotify:playlist:2" || loadedOrder[1] != "spotify:playlist:1" || loadedOrder[2] != "spotify:playlist:4" {
+		t.Errorf("persisted pin order mismatch: %v", loadedOrder)
+	}
+	if !loadedSet["spotify:playlist:4"] || !loadedSet["spotify:playlist:1"] || !loadedSet["spotify:playlist:2"] {
+		t.Errorf("persisted pin set missing items: %v", loadedSet)
+	}
+}
+
+func TestIsLocalActiveStateAccuracy(t *testing.T) {
+	client := &backend.Client{}
+	client.SetLocalDeviceID("local_123")
+
+	app := &AppModel{
+		client: client,
+	}
+
+	// 1. Daemon nil -> isLocalActive must be false
+	if app.isLocalActive() {
+		t.Errorf("expected isLocalActive to be false when daemon is nil")
+	}
+
+	// 2. Playback nil with StateIdle -> isLocalActive must be false
+	app.daemon = backend.NewDaemon()
+	client.SetSessionState(backend.StateIdle)
+	if app.isLocalActive() {
+		t.Errorf("expected isLocalActive to be false when daemon not running and state is Idle")
+	}
+
+	// 3. Remote active -> isLocalActive must be false
+	client.SetSessionState(backend.StateRemoteActive)
+	app.playback = &backend.PlaybackState{
+		DeviceID:   "remote_phone_456",
+		DeviceName: "iPhone",
+		Playing:    true,
+	}
+	if app.isLocalActive() {
+		t.Errorf("expected isLocalActive to be false when iPhone is playing")
+	}
+}
+
+func TestCycleFilterOnDemandFetch(t *testing.T) {
+	app := &AppModel{
+		playlistFilter: FilterAll,
+		albums:         nil,
+		artists:        nil,
+	}
+
+	// Cycling to FilterAlbums must return a non-nil fetch command when albums is empty
+	app.playlistFilter = FilterByYou
+	cmd := app.cycleFilter(1) // Next is FilterAlbums
+	if app.playlistFilter != FilterAlbums {
+		t.Fatalf("expected FilterAlbums, got %v", app.playlistFilter)
+	}
+	if cmd == nil {
+		t.Errorf("expected non-nil fetch command for empty albums on filter selection")
+	}
+}
+

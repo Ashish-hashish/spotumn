@@ -33,9 +33,22 @@ func RenderRightLines(
 	}
 	lines = append(lines, PadToWidth(StylePurple.Render(infoTitle), width))
 
-	// Art lines (enlarged)
+	// Art lines (enlarged, constrained to sidebar width without ANSI bleed)
 	if artANSI != "" {
 		for _, row := range strings.Split(artANSI, "\n") {
+			row = strings.TrimRight(row, "\r")
+			if row == "" {
+				continue
+			}
+			if strings.Contains(row, "\x1b[") {
+				if !strings.HasSuffix(row, "\x1b[0m") {
+					row += "\x1b[0m"
+				}
+				w := ansi.StringWidth(row)
+				if w > width {
+					row = ansi.Truncate(row, width, "") + "\x1b[0m"
+				}
+			}
 			lines = append(lines, CenterLine(row, width))
 		}
 	}
@@ -56,10 +69,19 @@ func RenderRightLines(
 		lines = append(lines, PadToWidth(BgPad(2)+StyleFaint.Render("No track playing"), width))
 	}
 
-	// Divider before Queue
+	// Divider before queue with right-aligned keybind badge
 	lines = append(lines, PadToWidth("", width))
-	queueHeader := "── UP NEXT ──────────────────────────────"
-	lines = append(lines, PadToWidth(StyleFaint.Render(TruncateString(queueHeader, width)), width))
+	prefix := "── UP NEXT "
+	badge := BgPad(1) + StylePurple.Render("⌜") + StyleBold.Render("q") + StylePurple.Render("⌟") + BgPad(1) + StyleLavender.Render("Queue") + StyleFaint.Render(" ──")
+	rawBadge := " ⌜q⌟ Queue ──"
+	neededDashes := width - ansi.StringWidth(prefix) - ansi.StringWidth(rawBadge)
+	var queueHeaderLine string
+	if neededDashes > 0 {
+		queueHeaderLine = StyleFaint.Render(prefix+strings.Repeat("─", neededDashes)) + badge
+	} else {
+		queueHeaderLine = StyleFaint.Render(TruncateString(prefix, width))
+	}
+	lines = append(lines, PadToWidth(queueHeaderLine, width))
 
 	headerLinesCount := len(lines)
 	availableQueueRows := height - headerLinesCount

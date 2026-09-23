@@ -117,11 +117,17 @@ func RenderPlayer(state *backend.PlaybackState, focused bool, width int) string 
 	lines := RenderPlayerLines(state, focused, contentW)
 
 	devName := "spotumn"
-	if state != nil && state.DeviceName != "" {
-		devName = state.DeviceName
+	devGlyph := "󰓃 "
+	if state != nil {
+		if state.DeviceName != "" {
+			devName = state.DeviceName
+		}
+		if state.DeviceType != "" {
+			devGlyph = DeviceTypeGlyph(state.DeviceType)
+		}
 	}
-	devTag := BgPad(1) + StyleLavender.Render("󰓃 "+TruncateString(devName, 18)) + StyleFaint.Render(" ─")
-	rawDevTag := " 󰓃 " + TruncateString(devName, 18) + " ─"
+	devTag := BgPad(1) + StyleLavender.Render(devGlyph+TruncateString(devName, 18)) + StyleFaint.Render(" ─")
+	rawDevTag := " " + devGlyph + TruncateString(devName, 18) + " ─"
 	devTagW := ansi.StringWidth(rawDevTag)
 
 	cornerTL := "╭"

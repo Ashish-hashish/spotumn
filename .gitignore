@@ -11,7 +11,7 @@ dist/
 
 # Test binaries
 *.test
-
+*_test.go
 # Output of the go coverage tool
 *.out
 

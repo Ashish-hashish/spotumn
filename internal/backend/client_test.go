@@ -47,7 +47,7 @@ func TestSaveAndLoadLastState(t *testing.T) {
 	}
 
 	// Verify file exists on disk
-	path := filepath.Join(config.GetDir(), "last_state.json")
+	path := filepath.Join(config.GetCacheDir(), "last_state.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected last_state.json file on disk, got error: %v", err)
 	}
@@ -137,4 +137,74 @@ func TestLoadLastStateDefaultsToSpotumnDevice(t *testing.T) {
 		t.Errorf("expected loaded state to clear remote DeviceID, got '%s'", loaded.DeviceID)
 	}
 }
+
+func TestSessionStateTransitions(t *testing.T) {
+	c := &Client{}
+
+	if c.SessionState() != StateIdle {
+		t.Errorf("expected default state StateIdle, got %v", c.SessionState())
+	}
+
+	c.SetSessionState(StateRemoteActive)
+	if c.SessionState() != StateRemoteActive {
+		t.Errorf("expected StateRemoteActive, got %v", c.SessionState())
+	}
+	if c.SessionState().String() != "REMOTE_ACTIVE" {
+		t.Errorf("expected string 'REMOTE_ACTIVE', got %s", c.SessionState().String())
+	}
+
+	c.SetSessionState(StateLocalActive)
+	if c.SessionState() != StateLocalActive {
+		t.Errorf("expected StateLocalActive, got %v", c.SessionState())
+	}
+	if c.SessionState().String() != "LOCAL_ACTIVE" {
+		t.Errorf("expected string 'LOCAL_ACTIVE', got %s", c.SessionState().String())
+	}
+
+	c.SetSessionState(StateTransferring)
+	if c.SessionState() != StateTransferring {
+		t.Errorf("expected StateTransferring, got %v", c.SessionState())
+	}
+
+	c.SetActiveDevice("phone_id", "Pixel 8")
+	id, name := c.ActiveDevice()
+	if id != "phone_id" || name != "Pixel 8" {
+		t.Errorf("expected phone_id / Pixel 8, got %s / %s", id, name)
+	}
+}
+
+func TestGetTargetDeviceIDPriority(t *testing.T) {
+	c := &Client{
+		localDeviceID: "spotumn_device_123",
+	}
+
+	// 1. With activeDeviceID set, it must return activeDeviceID
+	c.SetActiveDevice("active_remote_speaker", "Living Room Speaker")
+	target := c.getTargetDeviceID(nil)
+	if target == nil || *target != "active_remote_speaker" {
+		t.Fatalf("expected active_remote_speaker, got %v", target)
+	}
+
+	// 2. Clear active device; with cached devices containing an active device, it picks the active device
+	c.SetActiveDevice("", "")
+	c.cachedDevices = []spotify.PlayerDevice{
+		{ID: "spotumn_device_123", Name: "spotumn", Active: false},
+		{ID: "echo_dot_active", Name: "Echo Dot", Active: true},
+	}
+	target2 := c.getTargetDeviceID(nil)
+	if target2 == nil || *target2 != "echo_dot_active" {
+		t.Fatalf("expected echo_dot_active, got %v", target2)
+	}
+
+	// 3. If no active device, it targets spotumn local device
+	c.cachedDevices = []spotify.PlayerDevice{
+		{ID: "spotumn_device_123", Name: "spotumn", Active: false},
+		{ID: "tv_inactive", Name: "Smart TV", Active: false},
+	}
+	target3 := c.getTargetDeviceID(nil)
+	if target3 == nil || *target3 != "spotumn_device_123" {
+		t.Fatalf("expected spotumn_device_123, got %v", target3)
+	}
+}
+
 

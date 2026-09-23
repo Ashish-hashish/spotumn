@@ -42,6 +42,7 @@ const (
 	ActionZenMode       = "zen_mode"
 	ActionZenLayout     = "zen_layout"
 	ActionHelp          = "help"
+	ActionSettings      = "settings"
 	ActionEscape        = "escape"
 	ActionQuit          = "quit"
 )
@@ -83,8 +84,8 @@ func GetDefaultKeybindItems() []KeybindItem {
 		// Navigation & Tabs
 		{ID: ActionFocusPrev, Category: "Navigation & Tabs", Key: "[", Keys: []string{"["}, Desc: "Cycle pane focus backward", DefaultKey: "[", DefaultKeys: []string{"["}},
 		{ID: ActionFocusNext, Category: "Navigation & Tabs", Key: "]", Keys: []string{"]"}, Desc: "Cycle pane focus forward", DefaultKey: "]", DefaultKeys: []string{"]"}},
-		{ID: ActionCursorUp, Category: "Navigation & Tabs", Key: "k", Keys: []string{"up", "k"}, Desc: "Move cursor / navigate up (or ↑)", DefaultKey: "k", DefaultKeys: []string{"up", "k"}},
-		{ID: ActionCursorDown, Category: "Navigation & Tabs", Key: "j", Keys: []string{"down", "j"}, Desc: "Move cursor / navigate down (or ↓)", DefaultKey: "j", DefaultKeys: []string{"down", "j"}},
+		{ID: ActionCursorUp, Category: "Navigation & Tabs", Key: "↑", Keys: []string{"up"}, Desc: "Move cursor / navigate up", DefaultKey: "↑", DefaultKeys: []string{"up"}},
+		{ID: ActionCursorDown, Category: "Navigation & Tabs", Key: "↓", Keys: []string{"down"}, Desc: "Move cursor / navigate down", DefaultKey: "↓", DefaultKeys: []string{"down"}},
 		{ID: ActionSelect, Category: "Navigation & Tabs", Key: "Enter", Keys: []string{"enter"}, Desc: "Play track, open album, or seek lyrics", DefaultKey: "Enter", DefaultKeys: []string{"enter"}},
 		{ID: ActionOpenArtist, Category: "Navigation & Tabs", Key: "a", Keys: []string{"a"}, Desc: "Open artist page of currently playing track", DefaultKey: "a", DefaultKeys: []string{"a"}},
 		{ID: ActionBack, Category: "Navigation & Tabs", Key: "b", Keys: []string{"backspace", "b"}, Desc: "Go back to previous artist / container (or Backspace)", DefaultKey: "b", DefaultKeys: []string{"backspace", "b"}},
@@ -99,6 +100,7 @@ func GetDefaultKeybindItems() []KeybindItem {
 		{ID: ActionToggleSidebar, Category: "Layout & System", Key: "Shift+H", Keys: []string{"shift+h", "H"}, Desc: "Hide focused sidebar (restores both if hidden)", DefaultKey: "Shift+H", DefaultKeys: []string{"shift+h", "H"}},
 		{ID: ActionZenMode, Category: "Layout & System", Key: "z", Keys: []string{"z"}, Desc: "Toggle Zen mode (fullscreen art & lyrics)", DefaultKey: "z", DefaultKeys: []string{"z"}},
 		{ID: ActionZenLayout, Category: "Layout & System", Key: "v", Keys: []string{"v"}, Desc: "Cycle Zen layout (Art+Lyrics / Art / Lyrics)", DefaultKey: "v", DefaultKeys: []string{"v"}},
+		{ID: ActionSettings, Category: "Layout & System", Key: "`", Keys: []string{"`", "~"}, Desc: "Open Settings tab", DefaultKey: "`", DefaultKeys: []string{"`", "~"}},
 		{ID: ActionHelp, Category: "Layout & System", Key: "?", Keys: []string{"?"}, Desc: "Open / Close Keybindings window", DefaultKey: "?", DefaultKeys: []string{"?"}},
 		{ID: ActionEscape, Category: "Layout & System", Key: "Esc", Keys: []string{"esc"}, Desc: "Close modal / reset lyrics scroll / exit search", DefaultKey: "Esc", DefaultKeys: []string{"esc"}},
 		{ID: ActionQuit, Category: "Layout & System", Key: "Ctrl+C", Keys: []string{"ctrl+c"}, Desc: "Quit spotumn", DefaultKey: "Ctrl+C", DefaultKeys: []string{"ctrl+c"}},
@@ -246,7 +248,7 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 		items = GetDefaultKeybindItems()
 	}
 
-	modalW := 100
+	modalW := 102
 	if modalW > width-4 {
 		modalW = width - 4
 	}
@@ -257,20 +259,27 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 	var sb strings.Builder
 	sb.WriteString(PadToWidth("", modalW-2) + "\n")
 
-	// Friendly volume and seek cooldown note at the top
-	sb.WriteString(PadToWidth(StyleMint.Render("  ℹ  Tip:"), modalW-2) + "\n")
-	sb.WriteString(PadToWidth(StyleNormal.Render("     Spotify limits how fast volume requests can be sent over the internet."), modalW-2) + "\n")
-	sb.WriteString(PadToWidth(StyleFaint.Render("     Pressing volume/seek rapidly has a brief cooldown (~200ms) so Spotify doesn't rate-limit you."), modalW-2) + "\n")
+	// All navigation & action keybinds listed at the top
+	badgeNav := StylePurple.Render("⌜") + StyleBold.Render("↑/↓") + StylePurple.Render("⌟") + BgPad(1) + StyleLavender.Render("Navigate")
+	badgeEdit := StylePurple.Render("⌜") + StyleBold.Render("Enter") + StylePurple.Render("⌟") + BgPad(1) + StyleLavender.Render("Customize")
+	badgeReset := StylePurple.Render("⌜") + StyleBold.Render("0") + StylePurple.Render("⌟") + BgPad(1) + StyleLavender.Render("Reset")
+	badgeClose := StylePurple.Render("⌜") + StyleBold.Render("Esc / ?") + StylePurple.Render("⌟") + BgPad(1) + StyleLavender.Render("Close")
+	sb.WriteString(PadToWidth("  "+badgeNav+BgPad(3)+badgeEdit+BgPad(3)+badgeReset+BgPad(3)+badgeClose, modalW-2) + "\n")
+	sb.WriteString(PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n")
+	sb.WriteString(PadToWidth(StyleMint.Render("  Tip: ")+StyleFaint.Render("Spotify limits how fast volume requests can be sent over the internet."), modalW-2) + "\n")
 	sb.WriteString(PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n")
 	sb.WriteString(PadToWidth("", modalW-2) + "\n")
 
 	// Calculate visible viewport height for keybind cards
-	availH := height - 18
-	if availH < 6 {
-		availH = 6
+	availH := height - 10
+	if isEditing {
+		availH = height - 13
 	}
-	if availH > 18 {
-		availH = 18
+	if availH < 8 {
+		availH = 8
+	}
+	if availH > 28 {
+		availH = 28
 	}
 
 	startIdx := 0
@@ -313,6 +322,7 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 		contentW = 30
 	}
 
+	lastCat := ""
 	for i := startIdx; i < endIdx; i++ {
 		r := i - startIdx
 		item := items[i]
@@ -328,13 +338,19 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 			keyText = "[Press key...]"
 		}
 
-		keyPill := "◖" + keyText + "◗"
+		keyPill := "⌜" + keyText + "⌟"
 		if item.Key != item.DefaultKey && !(isSelected && isEditing) {
-			keyPill = "◖" + keyText + "◗*"
+			keyPill = "⌜" + keyText + "⌟*"
 		}
 
 		pillFormatted := PadPlain(keyPill, 16)
-		descFormatted := TruncateString(item.Desc, contentW-20)
+		catPrefix := ""
+		if item.Category != lastCat {
+			lastCat = item.Category
+		}
+		_ = catPrefix
+
+		descFormatted := TruncateString(item.Desc, contentW-24)
 
 		// Vertical scrollbar indicator
 		var scrollIndicator string
@@ -366,18 +382,13 @@ func RenderKeybindsModal(items []KeybindItem, selectedIdx int, isEditing bool, w
 		}
 	}
 
-	sb.WriteString(PadToWidth("", modalW-2) + "\n" + PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n")
-
-	var footer string
 	if isEditing {
-		footer = BgPad(2) + StyleMint.Render("⌨  Press any key to assign...") + BgPad(3) + StyleFaint.Render("[Esc] Cancel")
+		sb.WriteString(PadToWidth("", modalW-2) + "\n" + PadToWidth(StyleFaint.Render("  "+strings.Repeat("─", modalW-6)), modalW-2) + "\n")
+		footer := BgPad(2) + StyleMint.Render("⌨  Press any key to assign...") + BgPad(3) + StyleFaint.Render("⌜Esc⌟ Cancel")
+		sb.WriteString(PadToWidth(footer, modalW-2) + "\n")
 	} else {
-		footer = BgPad(2) + StyleLavender.Render("[↑/↓/j/k]") + StyleFaint.Render(" Nav   ") +
-			StylePurple.Render("[Enter]") + StyleFaint.Render(" Edit   ") +
-			StyleMint.Render("[0]") + StyleFaint.Render(" Reset   ") +
-			StyleLavender.Render("[?/Esc]") + StyleFaint.Render(" Close")
+		sb.WriteString(PadToWidth("", modalW-2) + "\n")
 	}
-	sb.WriteString(PadToWidth(footer, modalW-2) + "\n")
 
 	boxStyle := PanelBox(true, modalW, 0)
 	return boxStyle.Render(sb.String())

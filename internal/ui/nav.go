@@ -97,24 +97,27 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 
 		countStr := ""
 		displayName := pl.Name
+		numPrefix := ""
 		if filter == FilterAlbums {
+			numPrefix = fmt.Sprintf("%d. ", idx+1)
 			if pl.OwnerID != "" && width >= 34 {
 				displayName = fmt.Sprintf("%s ─ %s", pl.Name, pl.OwnerID)
 			}
 			countStr = fmt.Sprintf(" (%d)", pl.TrackCount)
 		} else if filter == FilterArtists {
+			numPrefix = fmt.Sprintf("%d. ", idx+1)
 			countStr = ""
 		} else if pl.TrackCount > 0 {
 			countStr = fmt.Sprintf(" (%d)", pl.TrackCount)
 		}
 
-		availNameW := width - ansi.StringWidth(prefix) - ansi.StringWidth(starPrefix) - ansi.StringWidth(countStr) - 1
+		availNameW := width - ansi.StringWidth(prefix) - ansi.StringWidth(starPrefix) - ansi.StringWidth(numPrefix) - ansi.StringWidth(countStr) - 1
 		if availNameW < 4 {
 			availNameW = 4
 		}
 
 		truncName := TruncateString(displayName, availNameW)
-		plainLine := prefix + starPrefix + truncName + countStr
+		plainLine := prefix + starPrefix + numPrefix + truncName + countStr
 
 		var lineContent string
 		if isSelected && focused {
@@ -123,13 +126,15 @@ func RenderNavLines(playlists []backend.Playlist, pinnedURIs map[string]bool, fi
 			lineContent = RenderPaddedLine(plainLine, StyleActiveUnfocusedBlock, width)
 		} else if starPrefix != "" {
 			starStyled := lipgloss.NewStyle().Foreground(CurrentTheme.Gold).Background(CurrentTheme.Surface).Bold(true).Render(prefix + starPrefix)
+			numStyled := StyleFaint.Render(numPrefix)
 			nameStyled := StyleNormal.Render(truncName)
 			cntStyled := StyleFaint.Render(countStr)
-			lineContent = PadToWidth(starStyled+nameStyled+cntStyled, width)
+			lineContent = PadToWidth(starStyled+numStyled+nameStyled+cntStyled, width)
 		} else {
-			nameStyled := StyleNormal.Render(prefix + truncName)
+			numStyled := StyleFaint.Render(numPrefix)
+			nameStyled := StyleNormal.Render(truncName)
 			cntStyled := StyleFaint.Render(countStr)
-			lineContent = PadToWidth(nameStyled+cntStyled, width)
+			lineContent = PadToWidth(prefix+numStyled+nameStyled+cntStyled, width)
 		}
 
 		lines = append(lines, lineContent)

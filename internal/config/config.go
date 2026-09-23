@@ -8,15 +8,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SpotifyClientID is the fixed built-in Spotify Connect client ID
-const SpotifyClientID = "d420a117a32841c2b3474932e49fb54b"
+const (
+	SpotifyClientID          = "d420a117a32841c2b3474932e49fb54b"
+	SpotifyLibrespotClientID = "65b708073fc0480ea92a077233ca87bd"
+)
+
 
 type Config struct {
-	Port        int    `yaml:"port"`
-	RedirectURI string `yaml:"redirect_uri"`
-	ArtRenderer string `yaml:"art_renderer"` // "auto", "image", "ansi"
-	Theme       string `yaml:"theme"`         // custom theme file or empty for default
+	Port               int    `yaml:"port"`
+	RedirectURI        string `yaml:"redirect_uri"`
+	ArtRenderer        string `yaml:"art_renderer"`
+	Theme              string `yaml:"theme"`
+	AppearanceMode     string `yaml:"appearance_mode"`
+	AutoShrinkSidebars bool   `yaml:"auto_shrink_sidebars"`
+	AudioBackend       string `yaml:"audio_backend"`
+	CrossfadeSec       int    `yaml:"crossfade"`
+	Bitrate            int    `yaml:"bitrate"`
+	Normalisation      bool   `yaml:"normalisation"`
 }
+
+const DefaultPort = 8989
 
 func GetDir() string {
 	home, err := os.UserHomeDir()
@@ -28,26 +39,54 @@ func GetDir() string {
 	return dir
 }
 
-const (
-	DefaultPort = 8989
-)
+func GetCacheDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(GetDir(), "cache")
+	}
+	dir := filepath.Join(home, ".cache", "spotumn")
+	_ = os.MkdirAll(dir, 0700)
+	return dir
+}
+
+func GetThemesDir() string {
+	dir := filepath.Join(GetDir(), "themes")
+	_ = os.MkdirAll(dir, 0700)
+	return dir
+}
+
+func defaults() *Config {
+	return &Config{
+		Port:               DefaultPort,
+		ArtRenderer:        "auto",
+		Theme:              "spotify",
+		AppearanceMode:     "dark",
+		AutoShrinkSidebars: true,
+		AudioBackend:       "auto",
+		Bitrate:            320,
+		Normalisation:      true,
+	}
+}
+
+func Get() *Config {
+	cfg, err := Load()
+	if err != nil {
+		return defaults()
+	}
+	return cfg
+}
 
 func Load() (*Config, error) {
-	cfg := &Config{
-		Port:        DefaultPort,
-		ArtRenderer: "auto",
-	}
+	cfg := defaults()
 
 	configPath := filepath.Join(GetDir(), "config.yml")
 	data, err := os.ReadFile(configPath)
 	if err != nil && os.IsNotExist(err) {
-		template := "# spotumn configuration\nport: 8989\n# art_renderer: auto # auto, ansi\n# theme: # custom theme.yml path or leave empty for default\n"
-		_ = os.WriteFile(configPath, []byte(template), 0600)
+		_ = Save(cfg)
 	} else if err == nil {
 		_ = yaml.Unmarshal(data, cfg)
 	}
 
-	// Environment variables take precedence over config file
 	if envURI := strings.TrimSpace(os.Getenv("SPOTUMN_REDIRECT_URI")); envURI != "" {
 		cfg.RedirectURI = envURI
 	}
@@ -63,6 +102,32 @@ func Load() (*Config, error) {
 	if cfg.ArtRenderer != "image" && cfg.ArtRenderer != "ansi" {
 		cfg.ArtRenderer = "auto"
 	}
+	if cfg.Theme == "" {
+		cfg.Theme = "spotify"
+	}
+	if cfg.AppearanceMode == "" {
+		cfg.AppearanceMode = "dark"
+	}
+	if cfg.AudioBackend == "" {
+		cfg.AudioBackend = "auto"
+	}
+	if cfg.Bitrate != 96 && cfg.Bitrate != 160 && cfg.Bitrate != 320 {
+		cfg.Bitrate = 320
+	}
+	if cfg.CrossfadeSec < 0 {
+		cfg.CrossfadeSec = 0
+	}
+	if cfg.CrossfadeSec > 12 {
+		cfg.CrossfadeSec = 12
+	}
 
 	return cfg, nil
+}
+
+func Save(cfg *Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(GetDir(), "config.yml"), data, 0600)
 }

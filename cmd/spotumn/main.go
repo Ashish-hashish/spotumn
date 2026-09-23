@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"spotumn/internal/auth"
@@ -16,9 +17,8 @@ import (
 )
 
 func main() {
-	// Strict memory management (<35MB target)
-	debug.SetMemoryLimit(35 * 1024 * 1024)
-	debug.SetGCPercent(50)
+	debug.SetMemoryLimit(40 * 1024 * 1024)
+	debug.SetGCPercent(20)
 
 	// Load configuration
 	cfg, err := config.Load()
@@ -40,11 +40,9 @@ func main() {
 	tokenSource := authService.GetTokenSource(ctx)
 	client := backend.NewClient(ctx, tokenSource)
 
-	// Launch librespot daemon for direct audio playback
+	// Launch embedded player daemon
 	daemon := backend.NewDaemon()
-	if err := daemon.Start(); err == nil {
-		defer daemon.Stop()
-	}
+	client.SetLocalDeviceID(daemon.DeviceId())
 
 	// Setup clean signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -59,8 +57,44 @@ func main() {
 		os.Exit(0)
 	}()
 
+	if !daemon.HasStoredCredentials() {
+		fmt.Println()
+		fmt.Println("==> Spotumn Embedded Player Setup (one-time)")
+		fmt.Println("    Authenticating Spotify Connect playback engine...")
+		if err := daemon.Start(""); err != nil {
+			fmt.Fprintf(os.Stderr, "spotumn: failed to start embedded player: %v\n", err)
+		} else {
+			defer daemon.Stop()
+
+			select {
+			case auth := <-daemon.AuthCodes():
+				if auth != nil {
+					fmt.Println()
+					fmt.Printf("    Pairing Code: %s\n", auth.Code)
+					fmt.Printf("    Pairing URL:  %s\n", auth.Url)
+					fmt.Println()
+					fmt.Println("    If your browser did not open automatically, visit the URL above.")
+					fmt.Println("    Please click 'Link account' / 'Pair' to connect the player.")
+					fmt.Println("    Waiting for authorization...")
+				}
+			case <-time.After(10 * time.Second):
+			}
+
+			waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer waitCancel()
+			if err := daemon.WaitUntilReady(waitCtx); err == nil {
+				fmt.Println("    ✔ Player authenticated and ready!")
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+	} else {
+		if err := daemon.Start(""); err == nil {
+			defer daemon.Stop()
+		}
+	}
+
 	// Run Bubble Tea TUI
-	app := ui.NewAppModel(client, cfg)
+	app := ui.NewAppModel(client, daemon, cfg)
 	prog := tea.NewProgram(app)
 
 	finalModel, err := prog.Run()

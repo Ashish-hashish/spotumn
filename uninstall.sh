@@ -7,14 +7,14 @@
 
 set -euo pipefail
 
-# ANSI color codes (Catppuccin Mocha aesthetic)
+# Adaptive ANSI color codes (High contrast & readable in both light and dark terminal modes)
 CLR_RESET="\033[0m"
 CLR_BOLD="\033[1m"
-CLR_LAVENDER="\033[38;2;180;190;254m"
-CLR_GREEN="\033[38;2;166;227;161m"
-CLR_PEACH="\033[38;2;250;179;135m"
-CLR_RED="\033[38;2;243;139;168m"
-CLR_SUBTEXT="\033[38;2;166;173;200m"
+CLR_LAVENDER="\033[1;34m"
+CLR_GREEN="\033[1;32m"
+CLR_PEACH="\033[1;33m"
+CLR_RED="\033[1;31m"
+CLR_SUBTEXT="\033[2m"
 
 log_info() {
     echo -e "${CLR_LAVENDER}${CLR_BOLD}==>${CLR_RESET} ${CLR_BOLD}$1${CLR_RESET}"
@@ -44,25 +44,46 @@ cat << 'EOF'
  |___/ .__/ \___/ \__|\__,_|_| |_| |_|_| |_|
      |_|                                    
 EOF
-echo -e "${CLR_SUBTEXT}   Spotify TUI Client (Uninstaller)${CLR_RESET}\n"
+echo -e "${CLR_RESET}${CLR_SUBTEXT}   Spotify TUI Client (Uninstaller)${CLR_RESET}\n"
 
 # Parse command-line arguments
 AUTO_CONFIRM=false
+DELETE_CONFIG=""
+DELETE_CACHE=""
+
 for arg in "$@"; do
     case "$arg" in
         -y|--yes|-f|--force)
             AUTO_CONFIRM=true
             ;;
+        --keep-config)
+            DELETE_CONFIG=false
+            if [ -z "$DELETE_CACHE" ]; then DELETE_CACHE=true; fi
+            ;;
+        --keep-cache)
+            DELETE_CACHE=false
+            if [ -z "$DELETE_CONFIG" ]; then DELETE_CONFIG=true; fi
+            ;;
+        --keep-both)
+            DELETE_CONFIG=false
+            DELETE_CACHE=false
+            ;;
+        --all|--purge)
+            DELETE_CONFIG=true
+            DELETE_CACHE=true
+            ;;
         -h|--help)
             echo "Usage: ./uninstall.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  -y, --yes, -f, --force   Skip confirmation prompt"
+            echo "  --keep-config            Keep configuration & credentials (~/.config/spotumn)"
+            echo "  --keep-cache             Keep cache directory (~/.cache/spotumn)"
+            echo "  --keep-both              Keep both configuration and cache"
+            echo "  --all, --purge           Remove everything (binary, config, and cache)"
+            echo "  -y, --yes, -f, --force   Skip confirmation prompts"
             echo "  -h, --help               Show this help message"
             echo ""
-            echo "This script uninstalls the spotumn binary, removes all configuration,"
-            echo "clears all cached data, and wipes all saved login credentials."
-            echo "The source directory (${SCRIPT_DIR}) is kept intact."
+            echo "The source directory (${SCRIPT_DIR}) is always kept intact."
             exit 0
             ;;
         *)
@@ -73,14 +94,56 @@ for arg in "$@"; do
     esac
 done
 
-# Confirm with user if interactive
+# Interactive choice if not specified via CLI flags
+if [ -z "$DELETE_CONFIG" ] || [ -z "$DELETE_CACHE" ]; then
+    if [ -t 0 ] && [ "$AUTO_CONFIRM" = false ]; then
+        echo -e "${CLR_BOLD}Choose what to remove:${CLR_RESET}"
+        echo -e "  ${CLR_LAVENDER}${CLR_BOLD}1)${CLR_RESET} ${CLR_BOLD}Remove everything${CLR_RESET} (binary, config, credentials, cache)  ${CLR_SUBTEXT}[Default]${CLR_RESET}"
+        echo -e "  ${CLR_LAVENDER}${CLR_BOLD}2)${CLR_RESET} ${CLR_BOLD}Keep config & credentials${CLR_RESET}, remove cache & binary"
+        echo -e "  ${CLR_LAVENDER}${CLR_BOLD}3)${CLR_RESET} ${CLR_BOLD}Keep cache${CLR_RESET}, remove config & binary"
+        echo -e "  ${CLR_LAVENDER}${CLR_BOLD}4)${CLR_RESET} ${CLR_BOLD}Keep both config & cache${CLR_RESET}, remove binary only"
+        echo ""
+        read -r -p "Select option [1-4] (default: 1): " sel
+        case "$sel" in
+            2)
+                DELETE_CONFIG=false
+                DELETE_CACHE=true
+                ;;
+            3)
+                DELETE_CONFIG=true
+                DELETE_CACHE=false
+                ;;
+            4)
+                DELETE_CONFIG=false
+                DELETE_CACHE=false
+                ;;
+            *)
+                DELETE_CONFIG=true
+                DELETE_CACHE=true
+                ;;
+        esac
+    else
+        DELETE_CONFIG=true
+        DELETE_CACHE=true
+    fi
+fi
+
+# Confirmation prompt
 if [ "$AUTO_CONFIRM" = false ]; then
     if [ -t 0 ]; then
-        echo -e "${CLR_PEACH}${CLR_BOLD}Warning:${CLR_RESET} This will remove:"
-        echo -e "  • ${CLR_BOLD}spotumn binary${CLR_RESET} from your system"
-        echo -e "  • ${CLR_BOLD}Login credentials & tokens${CLR_RESET} (~/.config/spotumn/credentials.json)"
-        echo -e "  • ${CLR_BOLD}Configuration & saved state${CLR_RESET} (~/.config/spotumn)"
-        echo -e "  • ${CLR_BOLD}Cached album art & librespot cache${CLR_RESET}"
+        echo ""
+        echo -e "${CLR_PEACH}${CLR_BOLD}Summary of actions:${CLR_RESET}"
+        echo -e "  • ${CLR_BOLD}spotumn binary${CLR_RESET}: Remove"
+        if [ "$DELETE_CONFIG" = true ]; then
+            echo -e "  • ${CLR_BOLD}Config & credentials${CLR_RESET} (~/.config/spotumn): ${CLR_RED}Delete${CLR_RESET}"
+        else
+            echo -e "  • ${CLR_BOLD}Config & credentials${CLR_RESET} (~/.config/spotumn): ${CLR_GREEN}Keep${CLR_RESET}"
+        fi
+        if [ "$DELETE_CACHE" = true ]; then
+            echo -e "  • ${CLR_BOLD}Cache${CLR_RESET} (~/.cache/spotumn): ${CLR_RED}Delete${CLR_RESET}"
+        else
+            echo -e "  • ${CLR_BOLD}Cache${CLR_RESET} (~/.cache/spotumn): ${CLR_GREEN}Keep${CLR_RESET}"
+        fi
         echo ""
         echo -e "${CLR_GREEN}Note:${CLR_RESET} Your source repository (${SCRIPT_DIR}) will remain ${CLR_BOLD}untouched${CLR_RESET}."
         echo ""
@@ -107,10 +170,6 @@ else
     echo -e "  • No running spotumn process found"
 fi
 
-if pgrep -f "librespot.*--name spotumn" >/dev/null 2>&1; then
-    pkill -f "librespot.*--name spotumn" 2>/dev/null || true
-    log_success "Stopped spotumn librespot background daemon"
-fi
 
 # 2. Remove binary from system install paths
 log_info "Removing spotumn binary..."
@@ -174,30 +233,38 @@ if [ "$REMOVED_ANY_BIN" = false ]; then
     echo -e "  • No installed spotumn binary found in standard system locations"
 fi
 
-# 3. Remove configuration, credentials, state, and caches
-log_info "Removing configuration, credentials, and data traces..."
+# 3. Remove configuration, credentials, state, and caches conditionally
+log_info "Cleaning data traces..."
 
 # Main config directory (~/.config/spotumn)
 SPOTUMN_CONFIG_DIR="${HOME}/.config/spotumn"
-if [ -d "$SPOTUMN_CONFIG_DIR" ]; then
-    rm -rf "$SPOTUMN_CONFIG_DIR"
-    log_success "Removed configuration & credentials: ${SPOTUMN_CONFIG_DIR}"
+if [ "$DELETE_CONFIG" = true ]; then
+    if [ -d "$SPOTUMN_CONFIG_DIR" ]; then
+        rm -rf "$SPOTUMN_CONFIG_DIR"
+        log_success "Removed configuration & credentials: ${SPOTUMN_CONFIG_DIR}"
+    fi
+    SPOTUMN_LEGACY_DIR="${HOME}/.spotumn"
+    if [ -d "$SPOTUMN_LEGACY_DIR" ]; then
+        rm -rf "$SPOTUMN_LEGACY_DIR"
+        log_success "Removed legacy directory: ${SPOTUMN_LEGACY_DIR}"
+    fi
 else
-    echo -e "  • ${SPOTUMN_CONFIG_DIR} does not exist"
+    if [ -d "$SPOTUMN_CONFIG_DIR" ]; then
+        log_info "Preserved configuration & credentials: ${SPOTUMN_CONFIG_DIR}"
+    fi
 fi
 
 # Cache directory (~/.cache/spotumn)
 SPOTUMN_CACHE_DIR="${HOME}/.cache/spotumn"
-if [ -d "$SPOTUMN_CACHE_DIR" ]; then
-    rm -rf "$SPOTUMN_CACHE_DIR"
-    log_success "Removed cache directory: ${SPOTUMN_CACHE_DIR}"
-fi
-
-# Legacy/fallback directory (~/.spotumn)
-SPOTUMN_LEGACY_DIR="${HOME}/.spotumn"
-if [ -d "$SPOTUMN_LEGACY_DIR" ]; then
-    rm -rf "$SPOTUMN_LEGACY_DIR"
-    log_success "Removed legacy directory: ${SPOTUMN_LEGACY_DIR}"
+if [ "$DELETE_CACHE" = true ]; then
+    if [ -d "$SPOTUMN_CACHE_DIR" ]; then
+        rm -rf "$SPOTUMN_CACHE_DIR"
+        log_success "Removed cache directory: ${SPOTUMN_CACHE_DIR}"
+    fi
+else
+    if [ -d "$SPOTUMN_CACHE_DIR" ]; then
+        log_info "Preserved cache directory: ${SPOTUMN_CACHE_DIR}"
+    fi
 fi
 
 # Clean any temporary files (/tmp/spotumn* /tmp/art-*)
@@ -206,6 +273,10 @@ rm -rf /tmp/spotumn* /tmp/art-* 2>/dev/null || true
 echo ""
 echo -e "${CLR_GREEN}${CLR_BOLD}Uninstallation Complete!${CLR_RESET}"
 echo -e "${CLR_SUBTEXT}──────────────────────────────────────────────────────────────────${CLR_RESET}"
-echo -e "All spotumn traces, login credentials, and config files have been removed."
+if [ "$DELETE_CONFIG" = true ] && [ "$DELETE_CACHE" = true ]; then
+    echo -e "All spotumn traces, login credentials, and cached files have been removed."
+else
+    echo -e "Binary removed. Preserved files remain accessible."
+fi
 echo -e "Your source folder (${CLR_LAVENDER}${SCRIPT_DIR}${CLR_RESET}) remains intact."
 echo ""

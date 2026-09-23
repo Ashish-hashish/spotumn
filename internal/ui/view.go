@@ -15,9 +15,9 @@ import (
 type ZenViewMode int
 
 const (
-	ZenViewBoth ZenViewMode = iota // Art + Lyrics
-	ZenViewArt                     // Art Only
-	ZenViewLyrics                  // Lyrics Only
+	ZenViewBoth   ZenViewMode = iota // Art + Lyrics
+	ZenViewArt                       // Art Only
+	ZenViewLyrics                    // Lyrics Only
 )
 
 func (z ZenViewMode) String() string {
@@ -32,42 +32,46 @@ func (z ZenViewMode) String() string {
 }
 
 type ViewParams struct {
-	Width            int
-	Height           int
-	Focused          FocusedPane
-	CurrentTab       CenterTab
-	ShowLeftSidebar  bool
-	ShowRightSidebar bool
-	ZenMode          bool
-	ZenView          ZenViewMode
-	ShowHelp         bool
-	HelpIndex        int
-	HelpEditing      bool
-	KeybindItems     []KeybindItem
-	ShowDevices      bool
-	DeviceScanning   bool
-	Devices          []spotify.PlayerDevice
-	DeviceIndex      int
-	Username         string
-	NavIndex         int
-	CenterIndex      int
-	QueueIndex       int
-	LyricsCursor     int
-	SearchFocused    bool
-	SearchQuery      string
-	Playlists        []backend.Playlist
-	PinnedURIs       map[string]bool
-	PlaylistFilter   PlaylistFilter
-	PlaylistTracks   []backend.Track
-	ArtistAlbums     []backend.Playlist
-	SearchArtists    []backend.Playlist
-	PlaylistName     string
-	History          []backend.Track
-	Playback         *backend.PlaybackState
-	Queue            []backend.Track
-	LyricsLines      []lyrics.Line
-	ArtANSI          string
-	ZenArtANSI       string
+	Width              int
+	Height             int
+	Focused            FocusedPane
+	CurrentTab         CenterTab
+	ShowLeftSidebar    bool
+	ShowRightSidebar   bool
+	AutoShrinkSidebars bool
+	ZenMode            bool
+	ZenView            ZenViewMode
+	ShowHelp           bool
+	HelpIndex          int
+	HelpEditing        bool
+	KeybindItems       []KeybindItem
+	ShowSettings       bool
+	SettingsState      SettingsState
+	ShowDevices        bool
+	DeviceScanning     bool
+	Devices            []spotify.PlayerDevice
+	DeviceIndex        int
+	Username           string
+	NavIndex           int
+	CenterIndex        int
+	QueueIndex         int
+	LyricsCursor       int
+	SearchFocused      bool
+	SearchQuery        string
+	Playlists          []backend.Playlist
+	PinnedURIs         map[string]bool
+	PlaylistFilter     PlaylistFilter
+	PlaylistTracks     []backend.Track
+	ArtistAlbums       []backend.Playlist
+	SearchArtists      []backend.Playlist
+	PlaylistName       string
+	CurrentPlURI       string
+	History            []backend.Track
+	Playback           *backend.PlaybackState
+	Queue              []backend.Track
+	LyricsLines        []lyrics.Line
+	ArtANSI            string
+	ZenArtANSI         string
 }
 
 // RenderFullUI renders the application running purely on terminal colors with highlighted focused borders
@@ -81,6 +85,12 @@ func RenderFullUI(p ViewParams) string {
 			Foreground(CurrentTheme.OnSurface).
 			Align(lipgloss.Center, lipgloss.Center).
 			Render(msg)
+	}
+
+	// Modal Settings overlay
+	if p.ShowSettings {
+		modal := RenderSettingsModal(p.SettingsState, p.Width, p.Height)
+		return CenterOverlay(modal, p.Width, p.Height)
 	}
 
 	// Modal Help overlay
@@ -117,8 +127,19 @@ func RenderFullUI(p ViewParams) string {
 		}
 	}
 
+	showNav := p.ShowLeftSidebar
+	showRight := p.ShowRightSidebar
+	if p.AutoShrinkSidebars {
+		if innerW < 125 {
+			showRight = false
+		}
+		if innerW < 90 {
+			showNav = false
+		}
+	}
+
 	var navW, rightW int
-	if p.ShowLeftSidebar && p.ShowRightSidebar {
+	if showNav && showRight {
 		navW = innerW * 28 / 100
 		if navW < 30 {
 			navW = 30
@@ -133,7 +154,7 @@ func RenderFullUI(p ViewParams) string {
 		if rightW > 50 {
 			rightW = 50
 		}
-	} else if p.ShowLeftSidebar {
+	} else if showNav {
 		navW = innerW * 30 / 100
 		if navW < 30 {
 			navW = 30
@@ -141,7 +162,7 @@ func RenderFullUI(p ViewParams) string {
 		if navW > 45 {
 			navW = 45
 		}
-	} else if p.ShowRightSidebar {
+	} else if showRight {
 		rightW = innerW * 36 / 100
 		if rightW < 34 {
 			rightW = 34
@@ -170,6 +191,7 @@ func RenderFullUI(p ViewParams) string {
 		p.Focused == PaneCenter,
 		centerW,
 		bodyH,
+		p.CurrentPlURI,
 	)
 
 	var views []string
@@ -189,7 +211,7 @@ func RenderFullUI(p ViewParams) string {
 	playerView := RenderPlayer(p.Playback, p.Focused == PanePlayer, innerW)
 	innerCombined := bodyContent + "\n" + playerView
 
-	// Construct overall outer border with green dot before spotumn and person icon before username
+	// Construct outer border with status indicator, username, and focus badge
 	userName := p.Username
 
 	greenDot := lipgloss.NewStyle().Foreground(CurrentTheme.Success).Background(CurrentTheme.Surface).Render("● ")
@@ -200,42 +222,56 @@ func RenderFullUI(p ViewParams) string {
 		userTag = BgPad(1) + personIcon + StyleLavender.Render(userName) + StyleFaint.Render(" ─")
 	}
 
-	middleDashesLen := innerW - ansi.StringWidth(titleTag) - ansi.StringWidth(userTag)
-	if middleDashesLen < 1 {
-		middleDashesLen = 1
-	}
-
 	cornerTL := StyleFaint.Render("╭")
 	cornerTR := StyleFaint.Render("╮")
 	sideBar := StyleFaint.Render("│")
 
-	topBorder := cornerTL + titleTag + StyleFaint.Render(strings.Repeat("─", middleDashesLen)) + userTag + cornerTR
+	focusTag := StylePurple.Render("⌜") + StyleBold.Render("[/]") + StylePurple.Render("⌟") + BgPad(1) + StyleLavender.Render("Focus")
+	rawFocusTag := "⌜[/]⌟ Focus"
+
+	dashesNeeded := innerW - ansi.StringWidth(titleTag) - ansi.StringWidth(userTag) - ansi.StringWidth(rawFocusTag) - 2
+	var topBorder string
+	if dashesNeeded >= 2 {
+		leftD := dashesNeeded / 2
+		rightD := dashesNeeded - leftD
+		topBorder = cornerTL + titleTag + StyleFaint.Render(strings.Repeat("─", leftD)) + BgPad(1) + focusTag + BgPad(1) + StyleFaint.Render(strings.Repeat("─", rightD)) + userTag + cornerTR
+	} else {
+		midDashes := innerW - ansi.StringWidth(titleTag) - ansi.StringWidth(userTag)
+		if midDashes < 1 {
+			midDashes = 1
+		}
+		topBorder = cornerTL + titleTag + StyleFaint.Render(strings.Repeat("─", midDashes)) + userTag + cornerTR
+	}
 
 	var items []keybindItem
-	if innerW >= 85 {
+	if innerW >= 110 {
 		items = []keybindItem{
 			{"Space", "Play"},
 			{"n", "Next"},
 			{"p", "Prev"},
-			{"[", "Focus Left"},
-			{"]", "Focus Right"},
-			{"/", "Search"},
-			{"q", "Queue"},
+			{"←/→", "Seek"},
+			{"-/=", "Vol"},
+			{"a", "Artist"},
+			{"s", "Shuffle"},
+			{"r", "Repeat"},
+			{"`", "Settings"},
 			{"?", "Help"},
 		}
-	} else if innerW >= 65 {
+	} else if innerW >= 75 {
 		items = []keybindItem{
 			{"Space", "Play"},
-			{"n/p", "Prev/Next"},
-			{"[/]", "Focus"},
-			{"/", "Search"},
+			{"n/p", "Next/Prev"},
+			{"←/→", "Seek"},
+			{"-/=", "Vol"},
+			{"a", "Artist"},
+			{"`", "Settings"},
 			{"?", "Help"},
 		}
 	} else {
 		items = []keybindItem{
 			{"Space", "Play"},
-			{"n/p", "Prev/Next"},
-			{"[/]", "Focus"},
+			{"n/p", "Next/Prev"},
+			{"`", "Settings"},
 			{"?", "Help"},
 		}
 	}
@@ -274,31 +310,47 @@ type keybindItem struct {
 }
 
 func renderKeybindBar(items []keybindItem, innerW int) string {
-	var renderedParts []string
-	var rawParts []string
-	dashSep := StyleFaint.Render(" ─ ")
-	for _, it := range items {
-		pill := StylePurple.Render("◖") + StyleBold.Render(it.key) + StylePurple.Render("◗")
-		renderedParts = append(renderedParts, pill+BgPad(1)+StyleLavender.Render(it.label))
-		rawParts = append(rawParts, "◖"+it.key+"◗ "+it.label)
-	}
-
-	rawShortcuts := " " + strings.Join(rawParts, " ─ ") + " "
-	shortcutsWidth := ansi.StringWidth(rawShortcuts)
-
 	cornerBL := StyleFaint.Render("╰")
 	cornerBR := StyleFaint.Render("╯")
-
-	if innerW > shortcutsWidth+4 {
-		remDashes := innerW - shortcutsWidth
-		leftD := remDashes / 2
-		rightD := remDashes - leftD
-		return cornerBL +
-			StyleFaint.Render(strings.Repeat("─", leftD)) +
-			BgPad(1) + strings.Join(renderedParts, dashSep) + BgPad(1) +
-			StyleFaint.Render(strings.Repeat("─", rightD)) +
-			cornerBR
+	if innerW < 10 {
+		return cornerBL + StyleFaint.Render(strings.Repeat("─", innerW)) + cornerBR
 	}
+
+	sep := BgPad(1)
+	rawSep := " "
+	if innerW >= 130 {
+		sep = BgPad(2)
+		rawSep = "  "
+	}
+
+	curItems := make([]keybindItem, len(items))
+	copy(curItems, items)
+
+	for len(curItems) > 0 {
+		var renderedParts []string
+		var rawParts []string
+		for _, it := range curItems {
+			pill := StylePurple.Render("⌜") + StyleBold.Render(it.key) + StylePurple.Render("⌟")
+			renderedParts = append(renderedParts, pill+BgPad(1)+StyleLavender.Render(it.label))
+			rawParts = append(rawParts, "⌜"+it.key+"⌟ "+it.label)
+		}
+
+		rawShortcuts := strings.Join(rawParts, rawSep)
+		shortcutsWidth := ansi.StringWidth(rawShortcuts) + 2
+
+		if innerW >= shortcutsWidth+2 {
+			remDashes := innerW - shortcutsWidth
+			leftD := remDashes / 2
+			rightD := remDashes - leftD
+			return cornerBL +
+				StyleFaint.Render(strings.Repeat("─", leftD)) +
+				BgPad(1) + strings.Join(renderedParts, sep) + BgPad(1) +
+				StyleFaint.Render(strings.Repeat("─", rightD)) +
+				cornerBR
+		}
+		curItems = curItems[:len(curItems)-1]
+	}
+
 	return cornerBL + StyleFaint.Render(strings.Repeat("─", innerW)) + cornerBR
 }
 
@@ -323,13 +375,51 @@ func renderZenLyrics(lines []lyrics.Line, cursorLine int, progressMs int, width,
 	}
 
 	if len(lines) == 0 {
-		msg := StyleFaint.Render("No synced lyrics available")
+		msg := StyleFaint.Render("No lyrics available")
 		midRow := height / 2
 		for i := 0; i < height; i++ {
 			if i == midRow {
 				output = append(output, CenterLine(msg, width))
 			} else {
 				output = append(output, PadToWidth("", width))
+			}
+		}
+		return output
+	}
+
+	isSynced := false
+	for _, l := range lines {
+		if l.TimeMs > 0 {
+			isSynced = true
+			break
+		}
+	}
+
+	if !isSynced {
+		midRow := height / 2
+		targetCenter := cursorLine
+		if targetCenter < 0 {
+			targetCenter = 0
+		}
+		for r := 0; r < height; r++ {
+			if r == 0 {
+				output = append(output, CenterLine(StyleFaint.Render("[Lyrics not synced]"), width))
+				continue
+			}
+			idx := targetCenter - (midRow - r)
+			if idx < 0 || idx >= len(lines) {
+				output = append(output, PadToWidth("", width))
+				continue
+			}
+			text := lines[idx].Text
+			if text == "" {
+				text = "♪"
+			}
+			if idx == cursorLine {
+				styled := lipgloss.NewStyle().Foreground(CurrentTheme.Primary).Background(CurrentTheme.Surface).Bold(true).Render("❯  " + text + "  ❮")
+				output = append(output, CenterLine(styled, width))
+			} else {
+				output = append(output, CenterLine(StyleFaint.Render(text), width))
 			}
 		}
 		return output
@@ -408,7 +498,7 @@ func renderZenMode(p ViewParams) string {
 		items = []keybindItem{
 			{"Space", "Play"},
 			{"n/p", "Prev/Next"},
-			{"j/k", "Lyrics"},
+			{"↑/↓", "Lyrics"},
 			{"Enter", "Seek"},
 			{"v", "View"},
 			{"z", "Exit Zen"},
@@ -416,7 +506,7 @@ func renderZenMode(p ViewParams) string {
 	} else if innerW >= 50 {
 		items = []keybindItem{
 			{"Space", "Play"},
-			{"j/k", "Lyrics"},
+			{"↑/↓", "Lyrics"},
 			{"v", "View"},
 			{"z", "Exit"},
 		}
@@ -699,11 +789,15 @@ func joinHorizontalThemed(views []string, widths []int, height int) string {
 	var combined []string
 	for r := 0; r < height; r++ {
 		var row strings.Builder
-		for _, vLines := range splitViews {
-			row.WriteString(vLines[r])
+		for i, vLines := range splitViews {
+			line := vLines[r]
+			w := widths[i]
+			if StringDisplayWidth(line) > w {
+				line = TruncateVisualWidth(line, w, "") + "\x1b[0m"
+			}
+			row.WriteString(line)
 		}
 		combined = append(combined, row.String())
 	}
 	return strings.Join(combined, "\n")
 }
-

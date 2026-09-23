@@ -101,6 +101,12 @@ func generatePKCE() (verifier, challenge string, err error) {
 	return verifier, challenge, nil
 }
 
+// StoredCredentials holds the saved OAuth token and associated client ID
+type StoredCredentials struct {
+	oauth2.Token
+	ClientID string `json:"client_id,omitempty"`
+}
+
 // LoadSavedToken loads the token from credentials.json
 func (a *AuthService) LoadSavedToken() (*oauth2.Token, error) {
 	a.tokenMu.Lock()
@@ -111,13 +117,19 @@ func (a *AuthService) LoadSavedToken() (*oauth2.Token, error) {
 		return nil, err
 	}
 
-	var tok oauth2.Token
-	if err := json.Unmarshal(data, &tok); err != nil {
+	var stored StoredCredentials
+	if err := json.Unmarshal(data, &stored); err != nil {
 		return nil, err
 	}
 
-	a.token = &tok
-	return &tok, nil
+	if stored.ClientID != a.oauthCfg.ClientID &&
+		stored.ClientID != config.SpotifyLibrespotClientID &&
+		stored.ClientID != "" {
+		return nil, errors.New("client ID mismatch")
+	}
+
+	a.token = &stored.Token
+	return &stored.Token, nil
 }
 
 // SaveToken saves token with strict 0600 permissions
@@ -125,13 +137,20 @@ func (a *AuthService) SaveToken(tok *oauth2.Token) error {
 	a.tokenMu.Lock()
 	defer a.tokenMu.Unlock()
 
+	if tok.RefreshToken == "" && a.token != nil && a.token.RefreshToken != "" {
+		tok.RefreshToken = a.token.RefreshToken
+	}
+
 	a.token = tok
-	data, err := json.MarshalIndent(tok, "", "  ")
+	stored := StoredCredentials{
+		Token:    *tok,
+		ClientID: a.oauthCfg.ClientID,
+	}
+	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	// 0600 mode prevents other local users from reading credentials
 	return os.WriteFile(a.tokenFile, data, 0600)
 }
 
@@ -141,18 +160,25 @@ func (a *AuthService) GetTokenSource(ctx context.Context) oauth2.TokenSource {
 	current := a.token
 	a.tokenMu.RUnlock()
 
+	initialRefresh := ""
+	if current != nil {
+		initialRefresh = current.RefreshToken
+	}
+
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, a.httpClient)
 	ts := a.oauthCfg.TokenSource(ctx, current)
 
 	return oauth2.ReuseTokenSource(current, &savingTokenSource{
-		src:  ts,
-		save: a.SaveToken,
+		src:          ts,
+		save:         a.SaveToken,
+		refreshToken: initialRefresh,
 	})
 }
 
 type savingTokenSource struct {
-	src  oauth2.TokenSource
-	save func(*oauth2.Token) error
+	src          oauth2.TokenSource
+	save         func(*oauth2.Token) error
+	refreshToken string
 }
 
 func (s *savingTokenSource) Token() (*oauth2.Token, error) {
@@ -160,28 +186,38 @@ func (s *savingTokenSource) Token() (*oauth2.Token, error) {
 	if err != nil {
 		return nil, err
 	}
+	if tok.RefreshToken == "" && s.refreshToken != "" {
+		tok.RefreshToken = s.refreshToken
+	} else if tok.RefreshToken != "" {
+		s.refreshToken = tok.RefreshToken
+	}
 	_ = s.save(tok)
 	return tok, nil
 }
 
-// Authorize performs the PKCE authorization flow using a local loopback server
+// Authorize performs authorization using saved credentials or falls back to browser login
 func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
-	// Try loading saved token first
 	if tok, err := a.LoadSavedToken(); err == nil && tok != nil {
 		if tok.Valid() {
 			return tok, nil
 		}
-		// If token is expired but has a refresh token, silently refresh without opening browser!
 		if tok.RefreshToken != "" {
 			ctxWithHTTP := context.WithValue(ctx, oauth2.HTTPClient, a.httpClient)
 			ts := a.oauthCfg.TokenSource(ctxWithHTTP, tok)
 			if refreshed, err := ts.Token(); err == nil && refreshed.Valid() {
+				if refreshed.RefreshToken == "" {
+					refreshed.RefreshToken = tok.RefreshToken
+				}
 				_ = a.SaveToken(refreshed)
 				return refreshed, nil
 			}
 		}
 	}
+	return a.AuthorizeNew(ctx)
+}
 
+// AuthorizeNew opens browser for Spotify OAuth authorization
+func (a *AuthService) AuthorizeNew(ctx context.Context) (*oauth2.Token, error) {
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return nil, fmt.Errorf("failed generating PKCE: %w", err)
@@ -204,6 +240,7 @@ func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
 	// Channel to receive the auth code or error
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
+	var once sync.Once
 
 	// Bind strictly to loopback IP (127.0.0.1) to avoid exposing callback on LAN
 	addr := fmt.Sprintf("127.0.0.1:%d", a.cfg.Port)
@@ -220,32 +257,45 @@ func (a *AuthService) Authorize(ctx context.Context) (*oauth2.Token, error) {
 	}
 
 	callbackHandler := func(w http.ResponseWriter, r *http.Request) {
+		// Ignore stray requests (e.g. /favicon.ico, /apple-touch-icon.png)
+		if r.URL.Path != "/login" && r.URL.Path != "/callback" {
+			http.NotFound(w, r)
+			return
+		}
+
+		q := r.URL.Query()
+		code := q.Get("code")
+		errStr := q.Get("error")
+
+		// If neither code nor error is present (e.g. prefetch or direct navigation), ignore and keep listening
+		if code == "" && errStr == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		queryState := q.Get("state")
+		if queryState != state {
+			http.Error(w, "Invalid state parameter (potential CSRF)", http.StatusBadRequest)
+			once.Do(func() {
+				errChan <- errors.New("state parameter mismatch: potential CSRF attack")
+			})
+			return
+		}
+
+		if errStr != "" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, "<h3>Authentication error: %s</h3>", html.EscapeString(errStr))
+			once.Do(func() {
+				errChan <- fmt.Errorf("spotify auth error: %s", errStr)
+			})
+			return
+		}
+
 		// Set secure response headers
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline';")
-
-		q := r.URL.Query()
-		if queryState := q.Get("state"); queryState != state {
-			http.Error(w, "Invalid state parameter (CSRF detected)", http.StatusBadRequest)
-			errChan <- errors.New("state parameter mismatch: potential CSRF attack")
-			return
-		}
-
-		if errStr := q.Get("error"); errStr != "" {
-			fmt.Fprintf(w, "<h3>Authentication error: %s</h3>", html.EscapeString(errStr))
-			errChan <- fmt.Errorf("spotify auth error: %s", errStr)
-			return
-		}
-
-		code := q.Get("code")
-		if code == "" {
-			http.Error(w, "Missing authorization code", http.StatusBadRequest)
-			errChan <- errors.New("no authorization code in callback")
-			return
-		}
-
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`<!DOCTYPE html>
 <html>
@@ -265,12 +315,16 @@ p { color: #a6adc8; font-size: 14px; }
 </body>
 </html>`))
 
-		codeChan <- code
+		once.Do(func() {
+			codeChan <- code
+		})
 	}
 
 	mux.HandleFunc("/login", callbackHandler)
 	mux.HandleFunc("/callback", callbackHandler)
-	mux.HandleFunc("/", callbackHandler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 
 	go func() {
 		_ = server.Serve(listener)
@@ -307,7 +361,7 @@ func (a *AuthService) exchangePKCE(ctx context.Context, code, verifier string) (
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"redirect_uri":  {a.oauthCfg.RedirectURL},
-		"client_id":     {config.SpotifyClientID},
+		"client_id":     {a.oauthCfg.ClientID},
 		"code_verifier": {verifier},
 	}
 
