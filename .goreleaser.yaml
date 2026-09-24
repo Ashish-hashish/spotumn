@@ -6,28 +6,24 @@ before:
     - go mod tidy
 
 builds:
-   
   - main: ./cmd/spotumn
-    env:
-      - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
+    env:
+      - CGO_ENABLED=1
+      - CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}
+      - CXX={{ if eq .Arch "arm64" }}aarch64-linux-gnu-g++{{ else }}g++{{ end }}
     flags:
       - -trimpath
     ldflags:
       - -s -w
 
 archives:
-  - format: tar.gz
-    # Use zip archives for Windows binaries
-    format_overrides:
-      - goos: windows
-        format: zip
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README*
