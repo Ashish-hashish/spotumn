@@ -13,7 +13,7 @@ import (
 	"spotumn/internal/ui/theme"
 )
 
-const SettingItemCount = 9
+const SettingItemCount = 10
 
 func NewSettingsState() state.SettingsState {
 	cfg := config.Get()
@@ -32,6 +32,7 @@ func NewSettingsState() state.SettingsState {
 		CrossfadeSec:  cfg.CrossfadeSec,
 		Bitrate:       cfg.Bitrate,
 		Normalisation: cfg.Normalisation,
+		Autoplay:      cfg.AutoplayOnStartup,
 		Accounts:      accMgr.GetAccounts(),
 		ActiveAccIdx:  accMgr.GetActiveIndex(),
 		CacheTarget:   state.CacheTargetAll,
@@ -181,6 +182,17 @@ func RenderSettingsModal(s state.SettingsState, width, height int) string {
 				return "◀  Disabled  ▶"
 			}(),
 			desc:     "",
+			category: "Audio Engine",
+		},
+		{
+			title: "Autoplay on Startup",
+			val: func() string {
+				if s.Autoplay {
+					return "◀  Enabled  ▶"
+				}
+				return "◀  Disabled  ▶"
+			}(),
+			desc:     "Auto-resume last song if no active device",
 			category: "Audio Engine",
 		},
 		{

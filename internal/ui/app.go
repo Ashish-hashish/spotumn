@@ -93,6 +93,17 @@ type AppModel struct {
 	seekTarget   int
 
 	lastActionTime time.Time
+
+	startupEvaluated   bool
+	localPlaybackReady bool
+	containerCache     map[string]containerCacheEntry
+	containerKeys      []string
+}
+
+type containerCacheEntry struct {
+	tracks   []backend.Track
+	albums   []backend.Playlist
+	cachedAt time.Time
 }
 
 type DaemonEventMsg struct {
@@ -156,6 +167,8 @@ func NewAppModel(client *backend.Client, daemon *backend.Daemon, cfg ...*config.
 		playlistFilter:     FilterAll,
 		username:           "",
 		keyManager:         NewKeyManager(),
+		containerCache:     make(map[string]containerCacheEntry, 5),
+		containerKeys:      make([]string, 0, 5),
 	}
 
 	// restore cached playback state so UI isn't blank while initial status polls
@@ -179,14 +192,11 @@ func (m *AppModel) isLocalActive() bool {
 	if m.client.SessionState() == backend.StateLocalActive {
 		return true
 	}
-	if m.playback != nil {
-		localID := m.client.LocalDeviceID()
-		if localID != "" && m.playback.DeviceID == localID {
-			return true
-		}
-		if strings.EqualFold(m.playback.DeviceName, "spotumn") {
-			return true
-		}
+	if m.client.SessionState() == backend.StateRemoteActive {
+		return false
+	}
+	if m.localPlaybackReady {
+		return true
 	}
 	return false
 }
@@ -197,8 +207,13 @@ func (m *AppModel) Init() tea.Cmd {
 		m.doTick(),
 		m.fetchUserCmd(),
 		m.fetchPlaylistsCmd(),
+		m.fetchAlbumsCmd(),
+		m.fetchArtistsCmd(),
 		m.fetchPlaybackCmd(),
+		m.fetchQueueCmd(),
+		m.fetchDevicesCmd(),
 		m.listenDaemonEventsCmd(),
+		m.fetchHistoryCmd(),
 	}
 	if m.lastArtURL != "" {
 		w, h := m.getRightSidebarArtGeometry()
@@ -206,7 +221,8 @@ func (m *AppModel) Init() tea.Cmd {
 		cmds = append(cmds, m.fetchArtCmd(m.lastArtURL, 56, 26, true))
 	}
 	if m.playback != nil && m.playback.CurrentTrack != nil {
-		cmds = append(cmds, m.fetchLyricsCmd(m.playback.CurrentTrack.Name, m.playback.CurrentTrack.Artist, m.playback.DurationMs/1000))
+		m.lyricsLines = nil
+		cmds = append(cmds, m.fetchLyricsCmd(m.playback.CurrentTrack.URI, m.playback.CurrentTrack.Name, m.playback.CurrentTrack.Artist, m.playback.DurationMs/1000))
 	}
 	return tea.Batch(cmds...)
 }
@@ -225,12 +241,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TickMsg:
 		m.tickCount++
 		if m.playback != nil && m.playback.Playing {
-			m.playback.ProgressMs += 500
-			if m.playback.DurationMs > 0 && m.playback.ProgressMs > m.playback.DurationMs {
-				m.playback.ProgressMs = m.playback.DurationMs
-			}
-			if m.tickCount%4 == 0 {
-				m.client.SaveLastState(m.playback)
+			if !m.isLocalActive() || m.localPlaybackReady {
+				m.playback.ProgressMs += 500
+				if m.playback.DurationMs > 0 && m.playback.ProgressMs > m.playback.DurationMs {
+					m.playback.ProgressMs = m.playback.DurationMs
+				}
+				if m.tickCount%4 == 0 {
+					m.client.SaveLastState(m.playback)
+				}
 			}
 		}
 
@@ -267,6 +285,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Event != nil {
 			switch msg.Event.Type {
 			case daemon.ApiEventTypePlaying:
+				m.localPlaybackReady = true
 				if m.playback != nil {
 					m.playback.Playing = true
 					m.client.SaveLastState(m.playback)
@@ -277,6 +296,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.client.SaveLastState(m.playback)
 				}
 			case daemon.ApiEventTypeStopped:
+				m.localPlaybackReady = false
 				if m.playback != nil {
 					m.playback.Playing = false
 					m.client.SaveLastState(m.playback)
@@ -327,6 +347,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.playback.ProgressMs = int(meta.Position)
 					m.playback.Playing = true
 					m.playback.DeviceName = "spotumn"
+					m.localPlaybackReady = true
 					m.client.SetSessionState(backend.StateLocalActive)
 					m.client.SaveLastState(m.playback)
 
@@ -334,8 +355,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.lastTrackURI = meta.Uri
 						m.lyricsCursor = 0
 						m.lyricsManualScroll = false
+						m.lyricsLines = nil
+						m.recordHistory(track)
 						cmds = append(cmds, m.fetchQueueCmd())
-						cmds = append(cmds, m.fetchLyricsCmd(meta.Name, artistStr, meta.Duration/1000))
+						cmds = append(cmds, m.fetchLyricsCmd(meta.Uri, meta.Name, artistStr, meta.Duration/1000))
 						if artURL != "" && artURL != m.lastArtURL {
 							m.lastArtURL = artURL
 							w, h := m.getRightSidebarArtGeometry()
@@ -361,14 +384,84 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case PlaybackMsg:
-		if msg != nil {
+		if !m.startupEvaluated {
+			m.startupEvaluated = true
+			localID := m.client.LocalDeviceID()
+			hasRemoteActive := msg != nil && msg.DeviceID != "" && msg.DeviceID != localID && !strings.EqualFold(msg.DeviceName, "spotumn") && msg.Playing
 
+			if hasRemoteActive {
+				m.client.SetSessionState(backend.StateRemoteActive)
+				m.localPlaybackReady = false
+				m.playback = msg
+				m.client.SaveLastState(msg)
+				if msg.CurrentTrack != nil {
+					m.lastTrackURI = msg.CurrentTrack.URI
+					m.lyricsCursor = 0
+					m.lyricsManualScroll = false
+					m.lyricsLines = nil
+					m.recordHistory(*msg.CurrentTrack)
+					var cmds []tea.Cmd
+					cmds = append(cmds, m.fetchQueueCmd())
+					cmds = append(cmds, m.fetchLyricsCmd(msg.CurrentTrack.URI, msg.CurrentTrack.Name, msg.CurrentTrack.Artist, msg.CurrentTrack.DurationMs/1000))
+					if msg.CurrentTrack.ArtURL != "" && msg.CurrentTrack.ArtURL != m.lastArtURL {
+						m.lastArtURL = msg.CurrentTrack.ArtURL
+						w, h := m.getRightSidebarArtGeometry()
+						cmds = append(cmds, m.fetchArtCmd(msg.CurrentTrack.ArtURL, w, h, false))
+						cmds = append(cmds, m.fetchArtCmd(msg.CurrentTrack.ArtURL, 56, 26, true))
+					}
+					return m, tea.Batch(cmds...)
+				}
+				return m, nil
+			}
+
+			m.client.SetSessionState(backend.StateLocalActive)
+			cfg := config.Get()
+			if cfg.AutoplayOnStartup && m.playback != nil && m.playback.CurrentTrack != nil {
+				targetURI := m.playback.ContextURI
+				if targetURI == "" {
+					targetURI = m.playback.CurrentTrack.URI
+				}
+				trackURI := m.playback.CurrentTrack.URI
+				posMs := m.playback.ProgressMs
+				m.playback.Playing = true
+				var cmds []tea.Cmd
+				cmds = append(cmds, func() tea.Msg {
+					_ = m.daemon.PlayURI(targetURI, trackURI, posMs)
+					return nil
+				})
+				return m, tea.Batch(cmds...)
+			}
+			if m.playback != nil {
+				m.playback.Playing = false
+			}
+			return m, nil
+		}
+
+		if msg != nil {
 			localID := m.client.LocalDeviceID()
 			isRemote := msg.DeviceID != "" && msg.DeviceID != localID && !strings.EqualFold(msg.DeviceName, "spotumn")
 			if isRemote && msg.Playing {
 				m.client.SetSessionState(backend.StateRemoteActive)
+				m.localPlaybackReady = false
 				m.playback = msg
 				m.client.SaveLastState(msg)
+				if msg.CurrentTrack != nil && msg.CurrentTrack.URI != m.lastTrackURI {
+					m.lastTrackURI = msg.CurrentTrack.URI
+					m.lyricsCursor = 0
+					m.lyricsManualScroll = false
+					m.lyricsLines = nil
+					m.recordHistory(*msg.CurrentTrack)
+					var cmds []tea.Cmd
+					cmds = append(cmds, m.fetchQueueCmd())
+					cmds = append(cmds, m.fetchLyricsCmd(msg.CurrentTrack.URI, msg.CurrentTrack.Name, msg.CurrentTrack.Artist, msg.CurrentTrack.DurationMs/1000))
+					if msg.CurrentTrack.ArtURL != m.lastArtURL && msg.CurrentTrack.ArtURL != "" {
+						m.lastArtURL = msg.CurrentTrack.ArtURL
+						w, h := m.getRightSidebarArtGeometry()
+						cmds = append(cmds, m.fetchArtCmd(msg.CurrentTrack.ArtURL, w, h, false))
+						cmds = append(cmds, m.fetchArtCmd(msg.CurrentTrack.ArtURL, 56, 26, true))
+					}
+					return m, tea.Batch(cmds...)
+				}
 				return m, nil
 			}
 
@@ -400,9 +493,11 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastTrackURI = msg.CurrentTrack.URI
 					m.lyricsCursor = 0
 					m.lyricsManualScroll = false
+					m.lyricsLines = nil
+					m.recordHistory(*msg.CurrentTrack)
 					var cmds []tea.Cmd
 					cmds = append(cmds, m.fetchQueueCmd())
-					cmds = append(cmds, m.fetchLyricsCmd(msg.CurrentTrack.Name, msg.CurrentTrack.Artist, msg.CurrentTrack.DurationMs/1000))
+					cmds = append(cmds, m.fetchLyricsCmd(msg.CurrentTrack.URI, msg.CurrentTrack.Name, msg.CurrentTrack.Artist, msg.CurrentTrack.DurationMs/1000))
 					if msg.CurrentTrack.ArtURL != m.lastArtURL && msg.CurrentTrack.ArtURL != "" {
 						m.lastArtURL = msg.CurrentTrack.ArtURL
 						w, h := m.getRightSidebarArtGeometry()
@@ -459,10 +554,35 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case HistoryMsg:
-		m.history = msg
+		if len(m.history) == 0 {
+			m.history = msg
+		} else {
+			seen := make(map[string]bool)
+			merged := make([]backend.Track, 0, len(m.history)+len(msg))
+			for _, t := range m.history {
+				if !seen[t.URI] && t.URI != "" {
+					seen[t.URI] = true
+					merged = append(merged, t)
+				}
+			}
+			for _, t := range msg {
+				if !seen[t.URI] && t.URI != "" {
+					seen[t.URI] = true
+					merged = append(merged, t)
+				}
+			}
+			if len(merged) > 50 {
+				merged = merged[:50]
+			}
+			m.history = merged
+		}
 		return m, nil
 
 	case TracksMsg:
+		m.setContainerCache(msg.PlaylistURI, msg.Tracks, msg.Albums)
+		if msg.PlaylistURI != "" && msg.PlaylistURI != m.currentPlURI {
+			return m, nil
+		}
 		m.currentPlURI = msg.PlaylistURI
 		if msg.PlaylistName != "" {
 			m.currentPlName = msg.PlaylistName
@@ -501,6 +621,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case LyricsMsg:
+		if msg.TrackURI != "" && m.playback != nil && m.playback.CurrentTrack != nil && msg.TrackURI != m.playback.CurrentTrack.URI {
+			return m, nil
+		}
 		m.lyricsLines = msg.Lines
 		m.lyricsSynced = msg.Synced
 		m.lyricsManualScroll = false
@@ -517,6 +640,13 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.lyricsCursor = 0
+		}
+		return m, nil
+
+	case ErrorMsg:
+		if !m.startupEvaluated {
+			m.startupEvaluated = true
+			m.client.SetSessionState(backend.StateLocalActive)
 		}
 		return m, nil
 
@@ -652,4 +782,46 @@ func (m *AppModel) View() tea.View {
 
 func (m *AppModel) GetPlaybackState() *backend.PlaybackState {
 	return m.playback
+}
+
+func (m *AppModel) recordHistory(t backend.Track) {
+	if t.URI == "" {
+		return
+	}
+	if len(m.history) > 0 && m.history[0].URI == t.URI {
+		return
+	}
+	filtered := make([]backend.Track, 0, len(m.history)+1)
+	filtered = append(filtered, t)
+	for _, item := range m.history {
+		if item.URI != t.URI {
+			filtered = append(filtered, item)
+		}
+	}
+	if len(filtered) > 50 {
+		filtered = filtered[:50]
+	}
+	m.history = filtered
+}
+
+func (m *AppModel) setContainerCache(uri string, tracks []backend.Track, albums []backend.Playlist) {
+	if uri == "" || strings.HasPrefix(uri, "search:") {
+		return
+	}
+	if m.containerCache == nil {
+		m.containerCache = make(map[string]containerCacheEntry, 5)
+	}
+	if _, exists := m.containerCache[uri]; !exists {
+		if len(m.containerKeys) >= 5 {
+			oldest := m.containerKeys[0]
+			m.containerKeys = m.containerKeys[1:]
+			delete(m.containerCache, oldest)
+		}
+		m.containerKeys = append(m.containerKeys, uri)
+	}
+	m.containerCache[uri] = containerCacheEntry{
+		tracks:   tracks,
+		albums:   albums,
+		cachedAt: time.Now(),
+	}
 }

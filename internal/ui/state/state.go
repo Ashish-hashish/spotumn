@@ -4,10 +4,11 @@ package state
 import (
 	"time"
 
-	"github.com/zmb3/spotify/v2"
 	"spotumn/internal/auth"
 	"spotumn/internal/backend"
 	"spotumn/internal/media/lyrics"
+
+	"github.com/zmb3/spotify/v2"
 )
 
 type FocusedPane int
@@ -117,6 +118,7 @@ type SettingsState struct {
 	CrossfadeSec  int
 	Bitrate       int
 	Normalisation bool
+	Autoplay      bool
 	Accounts      []auth.Account
 	ActiveAccIdx  int
 	CacheTarget   int
@@ -198,6 +200,7 @@ type AlbumsMsg []backend.Playlist
 type ArtistsMsg []backend.Playlist
 type HistoryMsg []backend.Track
 type LyricsMsg struct {
+	TrackURI string
 	Lines    []lyrics.Line
 	Synced   bool
 	Duration int

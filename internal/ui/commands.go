@@ -6,11 +6,12 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"golang.org/x/oauth2"
 	"spotumn/internal/auth"
 	"spotumn/internal/backend"
 	"spotumn/internal/config"
+
+	tea "charm.land/bubbletea/v2"
+	"golang.org/x/oauth2"
 )
 
 func (m *AppModel) doTick() tea.Cmd {
@@ -142,10 +143,10 @@ func (m *AppModel) fetchPlaylistTracksCmd(plID, plURI, plName string) tea.Cmd {
 	}
 }
 
-func (m *AppModel) fetchLyricsCmd(trackName, artistName string, durSec int) tea.Cmd {
+func (m *AppModel) fetchLyricsCmd(trackURI, trackName, artistName string, durSec int) tea.Cmd {
 	return func() tea.Msg {
 		lines, synced, _ := m.lyrProv.FetchSyncedLyrics(trackName, artistName, durSec)
-		return LyricsMsg{Lines: lines, Synced: synced}
+		return LyricsMsg{TrackURI: trackURI, Lines: lines, Synced: synced, Duration: durSec}
 	}
 }
 

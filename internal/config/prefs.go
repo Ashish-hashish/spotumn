@@ -25,6 +25,7 @@ type Config struct {
 	CrossfadeSec       int    `yaml:"crossfade"`
 	Bitrate            int    `yaml:"bitrate"`
 	Normalisation      bool   `yaml:"normalisation"`
+	AutoplayOnStartup  bool   `yaml:"autoplay_on_startup"`
 }
 
 const DefaultPort = 8989
@@ -65,6 +66,7 @@ func defaults() *Config {
 		AudioBackend:       "auto",
 		Bitrate:            320,
 		Normalisation:      true,
+		AutoplayOnStartup:  false,
 	}
 }
 

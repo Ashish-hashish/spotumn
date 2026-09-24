@@ -1,6 +1,7 @@
 # Compiled binaries
--spotumn
-+/spotumn
+/spotumn
+!cmd/spotumn/
+!cmd/spotumn/**
 bin/
 dist/
 

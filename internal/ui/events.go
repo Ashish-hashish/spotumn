@@ -480,7 +480,10 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.currentTab = TabLyrics
 		m.lyricsManualScroll = false
 		if m.playback != nil && m.playback.CurrentTrack != nil {
-			return m, m.fetchLyricsCmd(m.playback.CurrentTrack.Name, m.playback.CurrentTrack.Artist, m.playback.DurationMs/1000)
+			if len(m.lyricsLines) == 0 {
+				m.lyricsLines = nil
+				return m, m.fetchLyricsCmd(m.playback.CurrentTrack.URI, m.playback.CurrentTrack.Name, m.playback.CurrentTrack.Artist, m.playback.DurationMs/1000)
+			}
 		}
 		return m, nil
 
@@ -583,6 +586,15 @@ func (m *AppModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, func() tea.Msg {
 			if m.isLocalActive() {
+				if !isPlaying && !m.localPlaybackReady && trackURI != "" {
+					targetURI := contextURI
+					if targetURI == "" {
+						targetURI = trackURI
+					}
+					if err := m.daemon.PlayURI(targetURI, trackURI, progressMs); err == nil {
+						return nil
+					}
+				}
 				if err := m.daemon.PlayPause(); err == nil {
 					return nil
 				}
@@ -887,6 +899,16 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 		}
 
 	case 6:
+		m.settingsState.Autoplay = !m.settingsState.Autoplay
+		cfg.AutoplayOnStartup = m.settingsState.Autoplay
+		_ = config.Save(cfg)
+		if m.settingsState.Autoplay {
+			m.settingsState.Status = "Autoplay on startup: Enabled"
+		} else {
+			m.settingsState.Status = "Autoplay on startup: Disabled"
+		}
+
+	case 7:
 		accMgr := auth.NewAccountManager()
 		accounts := accMgr.GetAccounts()
 		if len(accounts) <= 1 {
@@ -907,13 +929,13 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.fetchUserCmd(), m.fetchPlaylistsCmd(), m.fetchPlaybackCmd())
 		}
 
-	case 7:
+	case 8:
 		if m.settingsState.ConfirmLogout {
 			m.settingsState.ConfirmLogout = false
 			m.settingsState.Status = "Logout cancelled."
 		}
 
-	case 8:
+	case 9:
 		targets := 4
 		next := (m.settingsState.CacheTarget + delta + targets) % targets
 		m.settingsState.CacheTarget = next
@@ -926,10 +948,22 @@ func (m *AppModel) handleSettingsArrow(delta int) (tea.Model, tea.Cmd) {
 func (m *AppModel) handleSettingsAction() (tea.Model, tea.Cmd) {
 	switch m.settingsState.Index {
 	case 6:
+		m.settingsState.Autoplay = !m.settingsState.Autoplay
+		cfg := config.Get()
+		cfg.AutoplayOnStartup = m.settingsState.Autoplay
+		_ = config.Save(cfg)
+		if m.settingsState.Autoplay {
+			m.settingsState.Status = "Autoplay on startup: Enabled"
+		} else {
+			m.settingsState.Status = "Autoplay on startup: Disabled"
+		}
+		return m, nil
+
+	case 7:
 		m.settingsState.Status = "Opening browser for Spotify login (experimental)..."
 		return m, m.addAccountCmd()
 
-	case 7:
+	case 8:
 		if !m.settingsState.ConfirmLogout {
 			m.settingsState.ConfirmLogout = true
 			m.settingsState.Status = "⚠ Confirm logout: Press Enter again to confirm, or Esc to cancel."
@@ -942,7 +976,7 @@ func (m *AppModel) handleSettingsAction() (tea.Model, tea.Cmd) {
 		m.settingsState.Status = "Session credentials cleared. Spotumn will require login on next launch."
 		return m, nil
 
-	case 8:
+	case 9:
 		_ = ClearCacheTarget(m.settingsState.CacheTarget)
 		names := []string{
 			"All cache purged (~/.cache/spotumn)",
@@ -1043,6 +1077,13 @@ func (m *AppModel) handleEnter() (tea.Model, tea.Cmd) {
 			m.artistAlbums = nil
 			m.searchQuery = ""
 			m.searchFocused = false
+			if cached, ok := m.containerCache[pl.URI]; ok && len(cached.tracks) > 0 {
+				m.playlistTracks = cached.tracks
+				m.artistAlbums = cached.albums
+				m.centerIndex = 0
+				return m, nil
+			}
+			m.playlistTracks = nil
 			return m, m.fetchPlaylistTracksCmd(pl.ID, pl.URI, pl.Name)
 		}
 
@@ -1182,8 +1223,27 @@ func (m *AppModel) handleEnter() (tea.Model, tea.Cmd) {
 			m.playback.Playing = !isPlaying
 			m.client.SaveLastState(m.playback)
 		}
+		trackURI := ""
+		contextURI := ""
+		progressMs := 0
+		if m.playback != nil && m.playback.CurrentTrack != nil {
+			trackURI = m.playback.CurrentTrack.URI
+			contextURI = m.playback.ContextURI
+			progressMs = m.playback.ProgressMs
+		}
 		return m, func() tea.Msg {
 			if m.isLocalActive() {
+				if !isPlaying && !m.localPlaybackReady && trackURI != "" {
+					targetURI := contextURI
+					if targetURI == "" {
+						targetURI = trackURI
+					}
+					if err := m.daemon.PlayURI(targetURI, trackURI, progressMs); err == nil {
+						time.Sleep(100 * time.Millisecond)
+						st, _ := m.client.GetPlaybackState(context.Background())
+						return PlaybackMsg(st)
+					}
+				}
 				if err := m.daemon.PlayPause(); err == nil {
 					time.Sleep(100 * time.Millisecond)
 					st, _ := m.client.GetPlaybackState(context.Background())

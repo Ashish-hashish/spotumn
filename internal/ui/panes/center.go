@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
 	"spotumn/internal/backend"
 	"spotumn/internal/media/lyrics"
 	"spotumn/internal/ui/state"
 	"spotumn/internal/ui/theme"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // render center pane composing the search bar, tab selector, and active content table

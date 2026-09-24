@@ -469,9 +469,18 @@ func (c *Client) GetAlbums(ctx context.Context) ([]Playlist, error) {
 
 func (c *Client) GetArtists(ctx context.Context) ([]Playlist, error) {
 	var artists []Playlist
+	after := ""
 
-	cursor, err := c.spClient.CurrentUsersFollowedArtists(ctx, spotify.Limit(50))
-	if err == nil && cursor != nil && len(cursor.Artists) > 0 {
+	for {
+		var opts []spotify.RequestOption
+		opts = append(opts, spotify.Limit(50))
+		if after != "" {
+			opts = append(opts, spotify.After(after))
+		}
+		cursor, err := c.spClient.CurrentUsersFollowedArtists(ctx, opts...)
+		if err != nil || cursor == nil || len(cursor.Artists) == 0 {
+			break
+		}
 		for _, a := range cursor.Artists {
 			img := ""
 			if len(a.Images) > 0 {
@@ -487,6 +496,13 @@ func (c *Client) GetArtists(ctx context.Context) ([]Playlist, error) {
 				Index:      len(artists),
 			})
 		}
+		if cursor.Cursor.After == "" || len(cursor.Artists) < 50 {
+			break
+		}
+		after = cursor.Cursor.After
+	}
+
+	if len(artists) > 0 {
 		return artists, nil
 	}
 
@@ -504,6 +520,7 @@ func (c *Client) GetArtists(ctx context.Context) ([]Playlist, error) {
 				OwnerID:    "Artist",
 				TrackCount: int(a.Popularity),
 				ImageURL:   img,
+				Index:      len(artists),
 			})
 		}
 	}
