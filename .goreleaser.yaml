@@ -7,24 +7,26 @@ before:
 
 builds:
   - main: ./cmd/spotumn
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
+    targets:
+      - linux_amd64
+      - linux_arm64
+    env:
+      - CGO_ENABLED=1
     flags:
       - -trimpath
     ldflags:
       - -s -w
     overrides:
-      - goarch: amd64
+      - goos: linux
+        goarch: amd64
         env:
           - CGO_ENABLED=1
           - CC=gcc
           - CXX=g++
           - PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
           - CGO_LDFLAGS=/usr/lib/x86_64-linux-gnu/libFLAC.a /usr/lib/x86_64-linux-gnu/libvorbis.a /usr/lib/x86_64-linux-gnu/libvorbisenc.a /usr/lib/x86_64-linux-gnu/libogg.a -lm
-      - goarch: arm64
+      - goos: linux
+        goarch: arm64
         env:
           - CGO_ENABLED=1
           - CC=aarch64-linux-gnu-gcc
