@@ -22,9 +22,26 @@ jobs:
         with:
           go-version: stable
 
-      - name: Install System Dependencies & ARM64 Cross-Compiler
+      - name: Configure APT for ARM64 & Install Dependencies
         run: |
+          # 1. Enable ARM64 architecture
           sudo dpkg --add-architecture arm64
+
+          # 2. Restrict standard repositories to amd64
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's/Types: deb/Types: deb\nArchitectures: amd64/' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+
+          # 3. Add Ubuntu Ports repository specifically for arm64
+          sudo bash -c 'cat <<EOF > /etc/apt/sources.list.d/arm64.sources
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports/
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main restricted universe multiverse
+          Architectures: arm64
+          EOF'
+
+          # 4. Update index and install cross-dependencies
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
