@@ -12,16 +12,25 @@ builds:
     goarch:
       - amd64
       - arm64
-    env:
-      - CGO_ENABLED=1
-      - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
-      - 'CXX={{ if eq .Arch "arm64" }}aarch64-linux-gnu-g++{{ else }}g++{{ end }}'
-      - 'PKG_CONFIG_PATH={{ if eq .Arch "arm64" }}/usr/lib/aarch64-linux-gnu/pkgconfig{{ else }}/usr/lib/x86_64-linux-gnu/pkgconfig{{ end }}'
-      - 'CGO_LDFLAGS={{ if eq .Arch "arm64" }}/usr/lib/aarch64-linux-gnu/libFLAC.a /usr/lib/aarch64-linux-gnu/libvorbis.a /usr/lib/aarch64-linux-gnu/libvorbisenc.a /usr/lib/aarch64-linux-gnu/libogg.a -lm{{ else }}/usr/lib/x86_64-linux-gnu/libFLAC.a /usr/lib/x86_64-linux-gnu/libvorbis.a /usr/lib/x86_64-linux-gnu/libvorbisenc.a /usr/lib/x86_64-linux-gnu/libogg.a -lm{{ end }}'
     flags:
       - -trimpath
     ldflags:
       - -s -w
+    overrides:
+      - goarch: amd64
+        env:
+          - CGO_ENABLED=1
+          - CC=gcc
+          - CXX=g++
+          - PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
+          - CGO_LDFLAGS=/usr/lib/x86_64-linux-gnu/libFLAC.a /usr/lib/x86_64-linux-gnu/libvorbis.a /usr/lib/x86_64-linux-gnu/libvorbisenc.a /usr/lib/x86_64-linux-gnu/libogg.a -lm
+      - goarch: arm64
+        env:
+          - CGO_ENABLED=1
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
+          - PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+          - CGO_LDFLAGS=/usr/lib/aarch64-linux-gnu/libFLAC.a /usr/lib/aarch64-linux-gnu/libvorbis.a /usr/lib/aarch64-linux-gnu/libvorbisenc.a /usr/lib/aarch64-linux-gnu/libogg.a -lm
 
 archives:
   - formats:
@@ -44,4 +53,4 @@ changelog:
       - "^docs:"
       - "^test:"
 
-krith
+jhatu
