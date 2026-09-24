@@ -21,8 +21,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      # Statically embed C audio decoders into the binary
-      - -extldflags "-Wl,-Bstatic -lFLAC -lvorbis -lvorbisenc -logg -lmpg123 -Wl,-Bdynamic"
+      # Statically link FLAC, Vorbis, and Ogg; dynamically link mpg123
+      - -extldflags "-Wl,-Bstatic -lFLAC -lvorbis -lvorbisenc -logg -Wl,-Bdynamic -lmpg123"
 
 archives:
   - formats:
