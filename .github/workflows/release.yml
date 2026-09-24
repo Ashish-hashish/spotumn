@@ -22,10 +22,19 @@ jobs:
         with:
           go-version: stable
 
-      - name: Install Linux ARM64 Cross-Compiler
+      - name: Install System Dependencies & ARM64 Cross-Compiler
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y \
+            pkg-config \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libasound2-dev libasound2-dev:arm64 \
+            libogg-dev libogg-dev:arm64 \
+            libvorbis-dev libvorbis-dev:arm64 \
+            libflac-dev libflac-dev:arm64 \
+            libmpg123-dev libmpg123-dev:arm64
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

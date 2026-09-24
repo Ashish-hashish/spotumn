@@ -16,6 +16,7 @@ builds:
       - CGO_ENABLED=1
       - CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}
       - CXX={{ if eq .Arch "arm64" }}aarch64-linux-gnu-g++{{ else }}g++{{ end }}
+      - PKG_CONFIG_PATH={{ if eq .Arch "arm64" }}/usr/lib/aarch64-linux-gnu/pkgconfig{{ else }}/usr/lib/x86_64-linux-gnu/pkgconfig{{ end }}
     flags:
       - -trimpath
     ldflags:
