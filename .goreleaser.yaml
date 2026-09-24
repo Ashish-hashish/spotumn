@@ -17,7 +17,7 @@ builds:
       - 'CC={{ if eq .Arch "arm64" }}aarch64-linux-gnu-gcc{{ else }}gcc{{ end }}'
       - 'CXX={{ if eq .Arch "arm64" }}aarch64-linux-gnu-g++{{ else }}g++{{ end }}'
       - 'PKG_CONFIG_PATH={{ if eq .Arch "arm64" }}/usr/lib/aarch64-linux-gnu/pkgconfig{{ else }}/usr/lib/x86_64-linux-gnu/pkgconfig{{ end }}'
-      - 'CGO_LDFLAGS={{ if eq .Arch "arm64" }}/usr/lib/aarch64-linux-gnu/libFLAC.a /usr/lib/aarch64-linux-gnu/libvorbis.a /usr/lib/aarch64-linux-gnu/libvorbisenc.a /usr/lib/aarch64-linux-gnu/libogg.a{{ else }}/usr/lib/x86_64-linux-gnu/libFLAC.a /usr/lib/x86_64-linux-gnu/libvorbis.a /usr/lib/x86_64-linux-gnu/libvorbisenc.a /usr/lib/x86_64-linux-gnu/libogg.a{{ end }}'
+      - 'CGO_LDFLAGS={{ if eq .Arch "arm64" }}/usr/lib/aarch64-linux-gnu/libFLAC.a /usr/lib/aarch64-linux-gnu/libvorbis.a /usr/lib/aarch64-linux-gnu/libvorbisenc.a /usr/lib/aarch64-linux-gnu/libogg.a -lm{{ else }}/usr/lib/x86_64-linux-gnu/libFLAC.a /usr/lib/x86_64-linux-gnu/libvorbis.a /usr/lib/x86_64-linux-gnu/libvorbisenc.a /usr/lib/x86_64-linux-gnu/libogg.a -lm{{ end }}'
     flags:
       - -trimpath
     ldflags:
@@ -44,3 +44,4 @@ changelog:
       - "^docs:"
       - "^test:"
 
+krith
