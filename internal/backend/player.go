@@ -106,6 +106,33 @@ func NewEventBridge() *EventBridge {
 	}
 }
 
+func initAppWithFallback(dCfg *daemon.Config, opts *daemon.Options) (*daemon.App, string, error) {
+	primary := dCfg.AudioBackend
+
+	candidates := []string{primary, "pulseaudio", "pipewire", "alsa", "dummy"}
+
+	seen := make(map[string]bool)
+	var lastErr error
+
+	for _, backend := range candidates {
+		if seen[backend] {
+			continue
+		}
+		seen[backend] = true
+
+		dCfg.AudioBackend = backend
+		opts.Config = dCfg
+
+		app, err := daemon.New(opts)
+		if err == nil {
+			return app, backend, nil
+		}
+		lastErr = err
+	}
+
+	return nil, "", fmt.Errorf("all audio backends failed (last error: %w)", lastErr)
+}
+
 func (b *EventBridge) AuthCodes() <-chan *daemon.ApiDeviceAuth {
 	return b.authCodes
 }
@@ -302,21 +329,18 @@ func (d *Daemon) Start(username string, token ...string) error {
 		return nil
 	}
 
+	// Suppress C-level ALSA stderr errors from messing up TUI grids
+	C.suppress_alsa_logging()
+
 	cfg := config.Get()
-	audioBackend := resolveAudioBackend(cfg.AudioBackend)
 	cacheDir := filepath.Join(config.GetCacheDir(), "librespot")
 	_ = os.MkdirAll(cacheDir, 0700)
 
-	credsCfg := daemon.CredentialsConfig{
-		Type: "device_auth",
-	}
-
-	// configure embedded librespot daemon with local caching, crossfade, and zeroconf
 	dCfg := &daemon.Config{
 		DeviceId:              d.deviceId,
 		DeviceName:            "spotumn",
 		DeviceType:            "computer",
-		AudioBackend:          audioBackend,
+		AudioBackend:          resolveAudioBackend(cfg.AudioBackend), // Initial preference
 		VolumeSteps:           100,
 		InitialVolume:         50,
 		Bitrate:               cfg.Bitrate,
@@ -331,21 +355,28 @@ func (d *Daemon) Start(username string, token ...string) error {
 		Metadata: daemon.MetadataConfig{
 			Enabled: true,
 		},
-		Credentials: credsCfg,
+		Credentials: daemon.CredentialsConfig{
+			Type: "device_auth",
+		},
 	}
 
 	bridge := NewEventBridge()
 
-	app, err := daemon.New(&daemon.Options{
+	opts := &daemon.Options{
 		Logger:     &librespot.NullLogger{},
-		Config:     dCfg,
 		StateStore: d.stateStore,
 		APIServer:  bridge,
-	})
+	}
+
+	// Initialize with fallback loop
+	app, workingBackend, err := initAppWithFallback(dCfg, opts)
 	if err != nil {
 		_ = bridge.Close()
 		return fmt.Errorf("embedded player init failed: %w", err)
 	}
+
+	// Log or store the actual audio backend that succeeded if needed
+	_ = workingBackend
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.app = app
