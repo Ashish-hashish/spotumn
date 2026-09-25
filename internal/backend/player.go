@@ -1,6 +1,19 @@
 // Embedded Librespot player daemon - manages Spotify Connect playback, audio backends, and local state.
 package backend
 
+/*
+#cgo LDFLAGS: -lasound
+#include <alsa/asoundlib.h>
+
+// Silence ALSA C-level diagnostic output on stderr
+static void quiet_alsa_error_handler(const char *file, int line, const char *function, int err, const char *fmt, ...) {}
+
+static void suppress_alsa_logging() {
+	snd_lib_error_set_handler(quiet_alsa_error_handler);
+}
+*/
+import "C"
+
 import (
 	"context"
 	"crypto/rand"
